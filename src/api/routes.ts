@@ -2540,10 +2540,11 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         ensure: ensureInfo,
         linked
       });
-    } catch (error) {
+    } catch (error: any) {
       res.status(500).json({
         success: false,
-        message: 'Failed to fetch alert videos'
+        message: 'Failed to fetch alert videos',
+        error: error?.message || String(error)
       });
     }
   });

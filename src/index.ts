@@ -104,7 +104,7 @@ import { DataWebSocketServer } from './api/dataWebsocket';
 import { LiveVideoStreamServer } from './streaming/liveStream';
 import { SSEVideoStream } from './streaming/sseStream';
 import { RetentionService } from './storage/retentionService';
-import pool from './storage/database';
+import pool, { ensureRuntimeSchema } from './storage/database';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
@@ -131,6 +131,7 @@ async function startServer() {
   
   try {
     await pool.query('SELECT NOW()');
+    await ensureRuntimeSchema();
     console.log('Database connected successfully');
   } catch (error) {
     console.error('Database connection failed:', error);

@@ -1991,7 +1991,7 @@ export class JTT808Server {
     }
   ): Promise<{ success: boolean; fallback: ScreenshotFallbackResult }> {
     const fallbackEnabled = options?.fallback !== false;
-    const fallbackDelayMs = Math.max(0, Math.min(3000, Number(options?.fallbackDelayMs) || 600));
+    const fallbackDelayMs = Math.max(0, Math.min(5000, Number(options?.fallbackDelayMs) || 1800));
     const captureVideoEvidence = options?.captureVideoEvidence === true;
     const videoDurationSec = Math.max(3, Math.min(20, Number(options?.videoDurationSec) || 8));
     this.rememberPendingScreenshotRequest(vehicleId, channel, options?.alertId);
@@ -2002,9 +2002,21 @@ export class JTT808Server {
     }
 
     await new Promise((r) => setTimeout(r, fallbackDelayMs));
-    const fallback = await this.captureScreenshotFromHLS(vehicleId, channel, options?.alertId);
+    let fallback = await this.captureScreenshotFromHLS(vehicleId, channel, options?.alertId);
+    if (!fallback.ok) {
+      // HLS playlists/segments can appear a few seconds after startVideo().
+      for (let attempt = 0; attempt < 3 && !fallback.ok; attempt++) {
+        await new Promise((r) => setTimeout(r, 1200));
+        fallback = await this.captureScreenshotFromHLS(vehicleId, channel, options?.alertId);
+      }
+    }
     if (captureVideoEvidence) {
-      const videoBackup = await this.captureVideoEvidenceFromHLS(vehicleId, channel, videoDurationSec, options?.alertId);
+      let videoBackup = await this.captureVideoEvidenceFromHLS(vehicleId, channel, videoDurationSec, options?.alertId);
+      if (!videoBackup.ok) {
+        // Retry once after segments are more likely to exist.
+        await new Promise((r) => setTimeout(r, 1500));
+        videoBackup = await this.captureVideoEvidenceFromHLS(vehicleId, channel, videoDurationSec, options?.alertId);
+      }
       if (videoBackup.ok && videoBackup.path) {
         fallback.videoEvidencePath = videoBackup.path;
         if (!fallback.ok) {
