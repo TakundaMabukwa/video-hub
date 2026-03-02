@@ -170,8 +170,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
        SET alert_id = $1
        WHERE alert_id IS NULL
          AND device_id = $2
-         AND channel BETWEEN GREATEST($3 - $4, 1) AND ($3 + $4)
-         AND timestamp BETWEEN $5 AND $6`,
+         AND channel BETWEEN GREATEST($3::int - $4::int, 1) AND ($3::int + $4::int)
+         AND timestamp BETWEEN $5::timestamp AND $6::timestamp`,
       [alertId, deviceId, channel, channelSpan, from, to]
     );
 
@@ -180,8 +180,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
        SET alert_id = $1
        WHERE alert_id IS NULL
          AND device_id = $2
-         AND channel BETWEEN GREATEST($3 - $4, 1) AND ($3 + $4)
-         AND start_time BETWEEN $5 AND $6
+         AND channel BETWEEN GREATEST($3::int - $4::int, 1) AND ($3::int + $4::int)
+         AND start_time BETWEEN $5::timestamp AND $6::timestamp
          AND video_type IN ('alert_pre', 'alert_post', 'camera_sd', 'manual')`,
       [alertId, deviceId, channel, channelSpan, vFrom, vTo]
     );
