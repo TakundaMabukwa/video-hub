@@ -1977,10 +1977,14 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
             alert?.metadata?.videoClips?.postStorageUrl || alert?.metadata?.videoClips?.post,
             `/api/alerts/${encodeURIComponent(id)}/video/post`
           ),
-	          preIncidentReady: !!(alert?.metadata?.videoClips?.pre || alert?.metadata?.videoClips?.preStorageUrl) &&
-	            Number(alert?.metadata?.videoClips?.preDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20)),
-          postIncidentReady: !!(alert?.metadata?.videoClips?.post || alert?.metadata?.videoClips?.postStorageUrl) &&
-            Number(alert?.metadata?.videoClips?.postDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20)),
+	          preIncidentReady: !!(
+              alert?.metadata?.videoClips?.pre ||
+              alert?.metadata?.videoClips?.preStorageUrl
+            ),
+          postIncidentReady: !!(
+            alert?.metadata?.videoClips?.post ||
+            alert?.metadata?.videoClips?.postStorageUrl
+          ),
           screenshots: screenshots.rows.map((img: any) => ({
             ...img,
             url: normalizePublicImageUrl(img),
@@ -2010,10 +2014,14 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
             alert?.metadata?.videoClips?.postStorageUrl || alert?.metadata?.videoClips?.post,
             `/api/alerts/${encodeURIComponent(id)}/video/post`
           ),
-	          preIncidentReady: !!(alert?.metadata?.videoClips?.pre || alert?.metadata?.videoClips?.preStorageUrl) &&
-	            Number(alert?.metadata?.videoClips?.preDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20)),
-	          postIncidentReady: !!(alert?.metadata?.videoClips?.post || alert?.metadata?.videoClips?.postStorageUrl) &&
-	            Number(alert?.metadata?.videoClips?.postDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20))
+	          preIncidentReady: !!(
+              alert?.metadata?.videoClips?.pre ||
+              alert?.metadata?.videoClips?.preStorageUrl
+            ),
+	          postIncidentReady: !!(
+              alert?.metadata?.videoClips?.post ||
+              alert?.metadata?.videoClips?.postStorageUrl
+            )
         },
         ensure: ensureInfo,
         linked
@@ -2454,11 +2462,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       const alertMetadata = parseAlertMetadata(alert.metadata);
       const videoClips = alertMetadata?.videoClips || {};
 
-      const minClipSeconds = Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20));
       const preDuration = Number(videoClips.preDuration || 0);
       const postDuration = Number(videoClips.postDuration || 0);
-      const hasPreEvent = !!(videoClips.pre || videoClips.preStorageUrl) && preDuration >= minClipSeconds;
-      const hasPostEvent = !!(videoClips.post || videoClips.postStorageUrl) && postDuration >= minClipSeconds;
+      const hasPreEvent = !!(videoClips.pre || videoClips.preStorageUrl);
+      const hasPostEvent = !!(videoClips.post || videoClips.postStorageUrl);
       const hasCameraVideo = !!(
         videoClips.cameraVideo ||
         videoClips.cameraVideoLocalPath ||
