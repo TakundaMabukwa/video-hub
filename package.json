@@ -7,7 +7,9 @@
     "build": "tsc",
     "dev": "ts-node src/index.ts",
     "start": "node dist/index.js",
+    "start:limited": "set UV_THREADPOOL_SIZE=1 && node --max-old-space-size=512 dist/index.js",
     "start:cluster": "pm2 start dist/index.js -i 4 --name video-server",
+    "start:pm2:limited": "pm2 start ecosystem.config.js --only video-server --update-env",
     "test:vendor-alerts": "ts-node src/tests/vendor-alert-conformance.ts"
   },
   "dependencies": {

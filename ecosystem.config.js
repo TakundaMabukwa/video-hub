@@ -2,11 +2,13 @@ module.exports = {
   apps: [{
     name: 'video-server',
     script: './dist/index.js',
-    instances: 4,
-    exec_mode: 'cluster',
-    max_memory_restart: '1G',
+    instances: 1,
+    exec_mode: 'fork',
+    node_args: '--max-old-space-size=512',
+    max_memory_restart: '512M',
     env: {
-      NODE_ENV: 'production'
+      NODE_ENV: 'production',
+      UV_THREADPOOL_SIZE: 1
     },
     log_date_format: 'YYYY-MM-DD HH:mm:ss',
     merge_logs: true,
