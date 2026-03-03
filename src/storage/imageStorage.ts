@@ -1,14 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { query } from './database';
-import { supabase, ensureBucket } from './supabase';
 
 export class ImageStorage {
-  private bucketReady: Promise<string>;
   private readonly localRoot: string;
 
   constructor() {
-    this.bucketReady = ensureBucket();
     this.localRoot = path.join(process.cwd(), 'media', 'images');
     try {
       fs.mkdirSync(this.localRoot, { recursive: true });
@@ -20,7 +17,6 @@ export class ImageStorage {
   }
 
   async saveImage(deviceId: string, channel: number, imageData: Buffer, alertId?: string): Promise<string> {
-    const bucketName = await this.bucketReady;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const relativeFilePath = `${deviceId}/ch${channel}/${timestamp}.jpg`;
     const localPath = this.buildLocalPath(relativeFilePath);
@@ -33,56 +29,17 @@ export class ImageStorage {
       console.error(`Failed to persist local screenshot ${localPath}:`, err?.message || err);
     }
 
-    // Supabase size limit guard.
-    const maxSize = 300 * 1024 * 1024; // 300MB
-    if (imageData.length > maxSize) {
-      const result = await query(
-        `INSERT INTO images (device_id, channel, file_path, storage_url, file_size, timestamp, alert_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id`,
-        [deviceId, channel, relativeFilePath, '', imageData.length, new Date(), alertId || null]
-      );
-      const id = result.rows[0].id;
-      await query(`UPDATE images SET storage_url = $1 WHERE id = $2`, [`/api/images/${id}/file`, id]);
-      return id;
-    }
-
-    // Try upload to Supabase.
-    const { error } = await supabase.storage
-      .from(bucketName)
-      .upload(relativeFilePath, imageData, {
-        contentType: 'image/jpeg',
-        upsert: false
-      });
-
-    if (error) {
-      const result = await query(
-        `INSERT INTO images (device_id, channel, file_path, storage_url, file_size, timestamp, alert_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id`,
-        [deviceId, channel, relativeFilePath, '', imageData.length, new Date(), alertId || null]
-      );
-      const id = result.rows[0].id;
-      await query(`UPDATE images SET storage_url = $1 WHERE id = $2`, [`/api/images/${id}/file`, id]);
-      return id;
-    }
-
-    const { data: urlData } = supabase.storage
-      .from(bucketName)
-      .getPublicUrl(relativeFilePath);
-
-    const publicUrl = urlData?.publicUrl || '';
+    // Screenshots are intentionally not uploaded to Supabase.
+    // Persist local path + API-served URL only.
     const result = await query(
       `INSERT INTO images (device_id, channel, file_path, storage_url, file_size, timestamp, alert_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id`,
-      [deviceId, channel, relativeFilePath, publicUrl, imageData.length, new Date(), alertId || null]
+      [deviceId, channel, relativeFilePath, '', imageData.length, new Date(), alertId || null]
     );
 
     const id = result.rows[0].id;
-    if (!publicUrl) {
-      await query(`UPDATE images SET storage_url = $1 WHERE id = $2`, [`/api/images/${id}/file`, id]);
-    }
+    await query(`UPDATE images SET storage_url = $1 WHERE id = $2`, [`/api/images/${id}/file`, id]);
     return id;
   }
 
@@ -114,4 +71,3 @@ export class ImageStorage {
     return result.rows;
   }
 }
-
