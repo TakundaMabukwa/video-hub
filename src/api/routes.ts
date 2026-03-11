@@ -9,8 +9,13 @@ import * as crypto from 'crypto';
 import { spawn } from 'child_process';
 import { query as dbQuery } from '../storage/database';
 import { archiveToRawH264 } from '../video/frameArchive';
+import { ReplayService } from '../streaming/replay';
 
-export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): express.Router {
+export function createRoutes(
+  tcpServer: JTT808Server,
+  udpServer: UDPRTPServer,
+  replayService?: ReplayService
+): express.Router {
   const router = express.Router();
   const FTP_DOWNLOADS_ENABLED = false;
   const speedingManager = new SpeedingManager();
@@ -3119,6 +3124,95 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       return res.status(500).json({
         success: false,
         message: 'Failed to fetch local videos',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
+  // Replay local recordings over the live websocket as if live.
+  router.post('/vehicles/:id/replay', async (req, res) => {
+    const { id } = req.params;
+    const { channel = 1, startTime, endTime, speed = 1, fps = 15 } = req.body || {};
+
+    if (!replayService) {
+      return res.status(500).json({ success: false, message: 'Replay service not available' });
+    }
+
+    if (!startTime || !endTime) {
+      return res.status(400).json({
+        success: false,
+        message: 'startTime and endTime are required (ISO timestamp)'
+      });
+    }
+
+    const start = new Date(startTime);
+    const end = new Date(endTime);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid time range'
+      });
+    }
+
+    const ch = Number(channel) || 1;
+    const speedValue = Math.max(0.25, Math.min(4, Number(speed) || 1));
+    const fpsValue = Math.max(1, Math.min(30, Number(fps) || 15));
+
+    try {
+      const db = require('../storage/database');
+      const result = await db.query(
+        `SELECT id, file_path, start_time, end_time, duration_seconds
+         FROM videos
+         WHERE device_id = $1
+           AND channel = $2
+           AND start_time <= $3
+           AND COALESCE(end_time, start_time) >= $4
+         ORDER BY start_time ASC`,
+        [id, ch, end, start]
+      );
+
+      const files = (result.rows || [])
+        .map((row: any) => ({
+          filePath: String(row.file_path || '').trim(),
+          startTime: row.start_time ? new Date(row.start_time) : undefined,
+          endTime: row.end_time ? new Date(row.end_time) : undefined,
+          durationSec: Number(row.duration_seconds || 0) || null
+        }))
+        .filter((f: any) => f.filePath);
+
+      if (files.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'No local recordings found in selected range'
+        });
+      }
+
+      const replayId = replayService.startReplay({
+        vehicleId: id,
+        channel: ch,
+        startTime: start,
+        endTime: end,
+        speed: speedValue,
+        fps: fpsValue
+      }, files);
+
+      return res.json({
+        success: true,
+        message: 'Replay started',
+        data: {
+          replayId,
+          vehicleId: id,
+          channel: ch,
+          startTime: start.toISOString(),
+          endTime: end.toISOString(),
+          speed: speedValue,
+          fps: fpsValue
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to start replay',
         error: error?.message || String(error)
       });
     }

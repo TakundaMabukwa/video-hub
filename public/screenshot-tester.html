@@ -317,6 +317,14 @@
             <button id="videoFillNowBtn">Set Last 60s</button>
             <button id="videoSearchBtn" class="primary">Find Clips In Range</button>
             <button id="videoLocalSearchBtn">Find Local Recordings</button>
+            <label style="display:flex; align-items:center; gap:8px; margin:0;">
+              Replay Speed
+              <select id="videoReplaySpeed" style="width:auto;">
+                <option value="1" selected>1x (Recommended)</option>
+                <option value="2">2x</option>
+              </select>
+            </label>
+            <button id="videoReplayBtn" class="primary">Replay Local Range (Live)</button>
           </div>
           <div id="videoResult" class="meta" style="margin-top:10px;">No request yet.</div>
           <div id="videoJobStatus" class="meta" style="margin-top:8px;"></div>
@@ -379,6 +387,7 @@
     const videoClipListEl = document.getElementById('videoClipList');
     const videoSavedListEl = document.getElementById('videoSavedList');
     const videoLocalListEl = document.getElementById('videoLocalList');
+    const videoReplaySpeedEl = document.getElementById('videoReplaySpeed');
 
     let autoRefresh = true;
     let refreshTimer = null;
@@ -1220,6 +1229,55 @@
       }
     }
 
+    async function replayLocalRange() {
+      const vehicleId = (videoVehicleIdEl.value || vehicleIdEl.value || '').trim();
+      const channel = Number(videoChannelEl.value || 1);
+      const startLocal = videoStartTimeEl.value;
+      const endLocal = videoEndTimeEl.value;
+      const speed = Number(videoReplaySpeedEl.value || 1) || 1;
+      if (!vehicleId || !startLocal || !endLocal) {
+        setStatus('Vehicle and time range are required to replay.', 'warn');
+        return;
+      }
+
+      const start = new Date(startLocal);
+      const end = new Date(endLocal);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+        setStatus('Invalid replay time range.', 'warn');
+        return;
+      }
+
+      setStatus('Starting replay stream...', 'ok');
+      try {
+        const res = await fetch(`/api/vehicles/${encodeURIComponent(vehicleId)}/replay`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            channel,
+            startTime: start.toISOString(),
+            endTime: end.toISOString(),
+            speed
+          })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) {
+          throw new Error(body.message || `HTTP ${res.status}`);
+        }
+        const d = body.data || {};
+        videoResultEl.innerHTML = `
+          <strong>Replay Started</strong><br/>
+          Replay ID: ${d.replayId}<br/>
+          Vehicle: ${d.vehicleId} | Channel: ${d.channel} | Speed: ${d.speed}x<br/>
+          Window: ${new Date(d.startTime).toLocaleString()} -> ${new Date(d.endTime).toLocaleString()}
+        `;
+        const previewUrl = `/live-stream.html?vehicleId=${encodeURIComponent(vehicleId)}&channel=${encodeURIComponent(channel)}&autostart=1&embedded=1&replay=1`;
+        videoPreviewFrameEl.src = previewUrl;
+        setStatus('Replay running in live viewer.', 'ok');
+      } catch (err) {
+        setStatus(`Replay failed: ${err.message}`, 'err');
+      }
+    }
+
     async function fetchRecentScreenshots(limitOverride, minutesOverride) {
       const minutes = Number((minutesOverride ?? minutesEl.value) || 30);
       const limit = Number((limitOverride ?? limitEl.value) || 50);
@@ -1709,6 +1767,7 @@
     document.getElementById('videoFillNowBtn').addEventListener('click', setDefaultVideoWindow);
     document.getElementById('videoSearchBtn').addEventListener('click', searchVideoClips);
     document.getElementById('videoLocalSearchBtn').addEventListener('click', searchLocalVideos);
+    document.getElementById('videoReplayBtn').addEventListener('click', replayLocalRange);
     document.getElementById('videoRefreshJobsBtn').addEventListener('click', refreshVideoJobs);
     document.getElementById('videoOpenViewerBtn').addEventListener('click', () => {
       const vehicleId = (videoVehicleIdEl.value || vehicleIdEl.value || '').trim();

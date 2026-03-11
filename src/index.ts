@@ -103,6 +103,7 @@ import { AlertWebSocketServer } from './api/websocket';
 import { DataWebSocketServer } from './api/dataWebsocket';
 import { LiveVideoStreamServer } from './streaming/liveStream';
 import { SSEVideoStream } from './streaming/sseStream';
+import { ReplayService } from './streaming/replay';
 import { RetentionService } from './storage/retentionService';
 import pool, { ensureRuntimeSchema } from './storage/database';
 import * as dotenv from 'dotenv';
@@ -169,6 +170,7 @@ async function startServer() {
   const dataWsServer = new DataWebSocketServer('/ws/data');
   const liveVideoServer = new LiveVideoStreamServer(tcpServer, '/ws/video');
   const sseVideoStream = new SSEVideoStream(tcpServer);
+  const replayService = new ReplayService(liveVideoServer);
   
   // Connect UDP frames to WebSocket and SSE broadcast
   udpServer.setFrameCallback((vehicleId, channel, frame, isIFrame) => {
@@ -198,7 +200,7 @@ async function startServer() {
   await udpServer.start();
   retentionService.start();
   
-  app.use('/api', createRoutes(tcpServer, udpServer));
+  app.use('/api', createRoutes(tcpServer, udpServer, replayService));
   app.use('/api/alerts', createAlertRoutes());
   
   app.get('/health', (req, res) => {

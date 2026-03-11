@@ -57,6 +57,7 @@
     const presetChannel = Number(query.get('channel') || '1');
     const presetAutoStart = query.get('autostart') === '1';
     const embedded = query.get('embedded') === '1';
+    const replayMode = query.get('replay') === '1';
 
     if (embedded) {
       document.body.style.margin = '0';
@@ -216,7 +217,8 @@
       ws.send(JSON.stringify({
         type: 'subscribe',
         vehicleId,
-        channel
+        channel,
+        mode: replayMode ? 'replay' : 'live'
       }));
     }
 
@@ -229,7 +231,8 @@
       ws.send(JSON.stringify({
         type: 'unsubscribe',
         vehicleId,
-        channel
+        channel,
+        mode: replayMode ? 'replay' : 'live'
       }));
 
       const key = `${vehicleId}_${channel}`;
