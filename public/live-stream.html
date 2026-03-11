@@ -276,6 +276,7 @@
         <div class="stats">
           <div>Frames: <span id="frames_${key}">0</span> | I-Frames: <span id="iframes_${key}">0</span></div>
           <div>Rate: <span id="rate_${key}">0</span> KB/s | Last: <span id="last_${key}" class="frame-info">-</span></div>
+          <div class="frame-info" id="decode_${key}"></div>
         </div>
       `;
       
@@ -284,6 +285,10 @@
       const canvas = document.getElementById(`canvas_${key}`);
       const ctx = canvas.getContext('2d');
       
+      // default canvas size so drawImage has a target even before decode
+      canvas.width = 640;
+      canvas.height = 360;
+
       streams.set(key, {
         vehicleId,
         channel,
@@ -297,7 +302,9 @@
         decoderReady: false,
         sps: null,
         pps: null,
-        decodeTs: 0
+        decodeTs: 0,
+        lastDecodeError: '',
+        lastKeyframe: null
       });
     }
 
@@ -388,6 +395,7 @@
             frame.close();
           },
           error: (e) => {
+            stream.lastDecodeError = e?.message || String(e);
             console.error('Decoder error:', e);
           }
         });
@@ -397,6 +405,7 @@
         });
         stream.decoderReady = true;
       } catch (err) {
+        stream.lastDecodeError = err?.message || String(err);
         console.error('Failed to init decoder:', err);
       }
     }
@@ -430,6 +439,7 @@
         ensureDecoder(stream, units);
         if (stream.decoderReady) {
           const hasKey = units.some((n) => (n[0] & 0x1f) === 5);
+          if (hasKey) stream.lastKeyframe = new Date();
           stream.decodeTs += 33_333; // ~30fps
           try {
             stream.decoder.decode(new EncodedVideoChunk({
@@ -438,6 +448,7 @@
               data: bytes
             }));
           } catch (e) {
+            stream.lastDecodeError = e?.message || String(e);
             console.error('Decode failed:', e);
           }
         } else {
@@ -467,6 +478,17 @@
         stream.ctx.font = '14px Arial';
         stream.ctx.fillStyle = '#888';
         stream.ctx.fillText(`${stream.iFrameCount} I-frames received`, 20, 130);
+      }
+
+      const decodeEl = document.getElementById(`decode_${key}`);
+      if (decodeEl) {
+        const sps = stream.sps ? 'yes' : 'no';
+        const pps = stream.pps ? 'yes' : 'no';
+        const ready = stream.decoderReady ? 'ready' : 'waiting';
+        const keyText = stream.lastKeyframe ? stream.lastKeyframe.toLocaleTimeString() : 'n/a';
+        const err = stream.lastDecodeError ? ` | err: ${stream.lastDecodeError}` : '';
+        const webc = supportsWebCodecs ? 'webcodecs:on' : 'webcodecs:off';
+        decodeEl.textContent = `${webc} | decoder:${ready} | sps:${sps} pps:${pps} | last key:${keyText}${err}`;
       }
     }
 
