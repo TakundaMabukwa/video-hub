@@ -3011,6 +3011,83 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     });
   });
 
+  // Query locally stored videos in a time range (DB-backed recordings)
+  router.post('/vehicles/:id/videos/local', async (req, res) => {
+    const { id } = req.params;
+    const { channel = 0, startTime, endTime, limit = 200 } = req.body || {};
+
+    if (!startTime || !endTime) {
+      return res.status(400).json({
+        success: false,
+        message: 'startTime and endTime are required (ISO timestamp)'
+      });
+    }
+
+    const start = new Date(startTime);
+    const end = new Date(endTime);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid time range'
+      });
+    }
+
+    const ch = Number(channel) || 0;
+    const maxLimit = Math.max(1, Math.min(500, Number(limit) || 200));
+
+    try {
+      const db = require('../storage/database');
+      const params: any[] = [id, start, end];
+      let sql = `
+        SELECT id, device_id, channel, video_type, file_path, storage_url, file_size,
+               start_time, end_time, duration_seconds, created_at, alert_id
+        FROM videos
+        WHERE device_id = $1
+          AND start_time BETWEEN $2 AND $3`;
+      if (ch > 0) {
+        sql += ` AND channel = $4`;
+        params.push(ch);
+      }
+      sql += ` ORDER BY start_time ASC LIMIT ${maxLimit}`;
+
+      const result = await db.query(sql, params);
+      const videos = (result.rows || []).map((v: any) => ({
+        id: v.id,
+        device_id: v.device_id,
+        channel: v.channel,
+        video_type: v.video_type,
+        file_path: v.file_path,
+        storage_url: v.storage_url,
+        file_size: v.file_size,
+        start_time: v.start_time,
+        end_time: v.end_time,
+        duration_seconds: v.duration_seconds,
+        created_at: v.created_at,
+        alert_id: v.alert_id,
+        url: normalizePublicVideoUrl(v.storage_url || v.file_path, buildStoredVideoUrl(v.id))
+      }));
+
+      return res.json({
+        success: true,
+        message: `Found ${videos.length} local video(s)`,
+        data: {
+          vehicleId: id,
+          channel: ch,
+          startTime: start.toISOString(),
+          endTime: end.toISOString(),
+          count: videos.length,
+          videos
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch local videos',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
   // Get status of a manual playback capture job
   router.get('/videos/jobs', (req, res) => {
     const vehicleIdFilter = String(req.query.vehicleId || '').trim();

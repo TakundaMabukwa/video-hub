@@ -316,10 +316,12 @@
             </label>
             <button id="videoFillNowBtn">Set Last 60s</button>
             <button id="videoSearchBtn" class="primary">Find Clips In Range</button>
+            <button id="videoLocalSearchBtn">Find Local Recordings</button>
           </div>
           <div id="videoResult" class="meta" style="margin-top:10px;">No request yet.</div>
           <div id="videoJobStatus" class="meta" style="margin-top:8px;"></div>
           <div id="videoClipList" class="meta" style="margin-top:10px;"></div>
+          <div id="videoLocalList" class="meta" style="margin-top:10px;"></div>
           <div style="margin-top:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
             <button id="videoRefreshJobsBtn">Refresh Saved Videos</button>
           </div>
@@ -376,6 +378,7 @@
     const videoReadyPlayerEl = document.getElementById('videoReadyPlayer');
     const videoClipListEl = document.getElementById('videoClipList');
     const videoSavedListEl = document.getElementById('videoSavedList');
+    const videoLocalListEl = document.getElementById('videoLocalList');
 
     let autoRefresh = true;
     let refreshTimer = null;
@@ -1087,6 +1090,35 @@
       videoClipListEl.innerHTML = rows;
     }
 
+    function renderLocalVideoList(videos) {
+      if (!Array.isArray(videos) || videos.length === 0) {
+        videoLocalListEl.innerHTML = '<span>No local recordings found in selected range.</span>';
+        return;
+      }
+      const rows = videos.map((v) => {
+        const sizeMb = v.file_size ? (Number(v.file_size) / (1024 * 1024)).toFixed(2) : '0.00';
+        const startText = v.start_time ? new Date(v.start_time).toLocaleString() : 'n/a';
+        const endText = v.end_time ? new Date(v.end_time).toLocaleString() : 'n/a';
+        const url = v.url || '';
+        const label = `${v.device_id || 'vehicle'} ch${v.channel || 1}`;
+        return `
+          <div style="border:1px solid var(--border); border-radius:8px; padding:10px; margin-bottom:8px; background:#0f1728;">
+            <div><strong>${label}</strong> | ${startText} → ${endText}</div>
+            <div class="meta">Type: ${v.video_type || 'live'} | Size: ${sizeMb} MB | ID: ${v.id}</div>
+            <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+              <button
+                data-play-local="${v.id}"
+                data-local-url="${url}"
+                style="width:auto; padding:6px 10px;"
+              >Play Local Video</button>
+              ${url ? `<a href="${url}" target="_blank" rel="noopener" style="color:#6aa6ff;">Open</a>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+      videoLocalListEl.innerHTML = rows;
+    }
+
     async function searchVideoClips() {
       const vehicleId = (videoVehicleIdEl.value || vehicleIdEl.value || '').trim();
       const channel = Number(videoChannelEl.value || 1);
@@ -1125,6 +1157,47 @@
       } catch (err) {
         videoClipListEl.textContent = `Clip search failed: ${err.message}`;
         setStatus(`Clip search failed: ${err.message}`, 'err');
+      }
+    }
+
+    async function searchLocalVideos() {
+      const vehicleId = (videoVehicleIdEl.value || vehicleIdEl.value || '').trim();
+      const channel = Number(videoChannelEl.value || 0);
+      const startLocal = videoStartTimeEl.value;
+      const endLocal = videoEndTimeEl.value;
+      if (!vehicleId || !startLocal || !endLocal) {
+        setStatus('Vehicle and time range are required to find local recordings.', 'warn');
+        return;
+      }
+
+      const start = new Date(startLocal);
+      const end = new Date(endLocal);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+        setStatus('Invalid local video time range.', 'warn');
+        return;
+      }
+
+      videoLocalListEl.textContent = 'Searching local recordings...';
+      try {
+        const res = await fetch(`/api/vehicles/${encodeURIComponent(vehicleId)}/videos/local`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            channel,
+            startTime: start.toISOString(),
+            endTime: end.toISOString()
+          })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) {
+          throw new Error(body.message || `HTTP ${res.status}`);
+        }
+        const videos = body?.data?.videos || [];
+        setStatus(body.message || `Found ${videos.length} local recordings`, 'ok');
+        renderLocalVideoList(videos);
+      } catch (err) {
+        videoLocalListEl.textContent = `Local search failed: ${err.message}`;
+        setStatus(`Local search failed: ${err.message}`, 'err');
       }
     }
 
@@ -1616,6 +1689,7 @@
     document.getElementById('videoRequestBtn').addEventListener('click', requestVideoByRange);
     document.getElementById('videoFillNowBtn').addEventListener('click', setDefaultVideoWindow);
     document.getElementById('videoSearchBtn').addEventListener('click', searchVideoClips);
+    document.getElementById('videoLocalSearchBtn').addEventListener('click', searchLocalVideos);
     document.getElementById('videoRefreshJobsBtn').addEventListener('click', refreshVideoJobs);
     document.getElementById('videoOpenViewerBtn').addEventListener('click', () => {
       const vehicleId = (videoVehicleIdEl.value || vehicleIdEl.value || '').trim();
@@ -1655,6 +1729,18 @@
         setStatus(`Job ${jobId} is ${jobStatus || 'pending'}. Waiting for completion...`, 'warn');
       }
       pollVideoJob(jobId);
+    });
+    videoLocalListEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-play-local]');
+      if (!btn) return;
+      const fileUrl = btn.getAttribute('data-local-url');
+      if (!fileUrl) {
+        setStatus('No playback URL available for this recording.', 'warn');
+        return;
+      }
+      videoReadyPlayerEl.src = fileUrl;
+      videoReadyPlayerEl.load();
+      setStatus('Loaded local recording in player.', 'ok');
     });
     alertsEl.addEventListener('click', (e) => {
       const target = e.target.closest('button[data-request-video],button[data-open-videos],button[data-refresh-alert-video]');
