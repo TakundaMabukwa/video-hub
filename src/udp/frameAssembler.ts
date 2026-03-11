@@ -78,29 +78,36 @@ export class FrameAssembler {
   }
 
   private extractParameterSets(payload: Buffer, streamKey: string): void {
-    for (let i = 0; i < payload.length - 4; i++) {
-      if (payload[i] === 0x00 && payload[i + 1] === 0x00 && 
-          payload[i + 2] === 0x00 && payload[i + 3] === 0x01) {
-        const nalType = payload[i + 4] & 0x1F;
-        
-        // Find next start code
-        let nextStart = payload.length;
-        for (let j = i + 4; j < payload.length - 4; j++) {
-          if (payload[j] === 0x00 && payload[j + 1] === 0x00 && 
-              payload[j + 2] === 0x00 && payload[j + 3] === 0x01) {
-            nextStart = j;
-            break;
-          }
-        }
-        
-        if (nalType === 7) { // SPS
-          this.spsCache.set(streamKey, payload.slice(i, nextStart));
-        } else if (nalType === 8) { // PPS
-          this.ppsCache.set(streamKey, payload.slice(i, nextStart));
-        }
-        
-        i = nextStart - 1;
+    const len = payload.length;
+    for (let i = 0; i < len - 3; i++) {
+      let startCodeLen = 0;
+      if (payload[i] === 0x00 && payload[i + 1] === 0x00 && payload[i + 2] === 0x01) {
+        startCodeLen = 3;
+      } else if (i + 3 < len && payload[i] === 0x00 && payload[i + 1] === 0x00 &&
+                 payload[i + 2] === 0x00 && payload[i + 3] === 0x01) {
+        startCodeLen = 4;
       }
+      if (!startCodeLen) continue;
+
+      const nalType = payload[i + startCodeLen] & 0x1F;
+
+      // Find next start code (3- or 4-byte)
+      let nextStart = len;
+      for (let j = i + startCodeLen; j < len - 3; j++) {
+        if (payload[j] === 0x00 && payload[j + 1] === 0x00 &&
+            (payload[j + 2] === 0x01 || (payload[j + 2] === 0x00 && payload[j + 3] === 0x01))) {
+          nextStart = j;
+          break;
+        }
+      }
+
+      if (nalType === 7) { // SPS
+        this.spsCache.set(streamKey, payload.slice(i, nextStart));
+      } else if (nalType === 8) { // PPS
+        this.ppsCache.set(streamKey, payload.slice(i, nextStart));
+      }
+
+      i = nextStart - 1;
     }
   }
 
@@ -117,12 +124,18 @@ export class FrameAssembler {
   }
 
   private isIFrame(frame: Buffer): boolean {
-    for (let i = 0; i < frame.length - 4; i++) {
-      if (frame[i] === 0x00 && frame[i + 1] === 0x00 && 
-          frame[i + 2] === 0x00 && frame[i + 3] === 0x01) {
-        const nalType = frame[i + 4] & 0x1F;
-        if (nalType === 5) return true;
+    const len = frame.length;
+    for (let i = 0; i < len - 3; i++) {
+      let startCodeLen = 0;
+      if (frame[i] === 0x00 && frame[i + 1] === 0x00 && frame[i + 2] === 0x01) {
+        startCodeLen = 3;
+      } else if (i + 3 < len && frame[i] === 0x00 && frame[i + 1] === 0x00 &&
+                 frame[i + 2] === 0x00 && frame[i + 3] === 0x01) {
+        startCodeLen = 4;
       }
+      if (!startCodeLen) continue;
+      const nalType = frame[i + startCodeLen] & 0x1F;
+      if (nalType === 5) return true;
     }
     return false;
   }

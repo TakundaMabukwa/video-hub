@@ -3183,6 +3183,18 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         if (statusFilter && job.status !== statusFilter) return false;
         return true;
       })
+      .map((job) => {
+        let fileReady = false;
+        let fileSize = 0;
+        if (job.outputPath && fs.existsSync(job.outputPath)) {
+          try {
+            const st = fs.statSync(job.outputPath);
+            fileReady = st.size > 0;
+            fileSize = st.size || 0;
+          } catch {}
+        }
+        return { ...job, fileReady, fileSize };
+      })
       .sort((a, b) => {
         const ta = new Date(a.createdAt).getTime();
         const tb = new Date(b.createdAt).getTime();
@@ -3208,9 +3220,18 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         message: `Job ${id} not found`
       });
     }
+    let fileReady = false;
+    let fileSize = 0;
+    if (job.outputPath && fs.existsSync(job.outputPath)) {
+      try {
+        const st = fs.statSync(job.outputPath);
+        fileReady = st.size > 0;
+        fileSize = st.size || 0;
+      } catch {}
+    }
     res.json({
       success: true,
-      data: job
+      data: { ...job, fileReady, fileSize }
     });
   });
 
@@ -3222,7 +3243,15 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       return res.status(404).json({ success: false, message: `Job ${id} not found` });
     }
     if (job.status !== 'completed' || !job.outputPath || !fs.existsSync(job.outputPath)) {
-      return res.status(404).json({ success: false, message: 'Video file not ready' });
+      return res.status(404).json({
+        success: false,
+        message: 'Video file not ready',
+        data: {
+          status: job.status,
+          error: job.error || null,
+          outputPath: job.outputPath || null
+        }
+      });
     }
     res.setHeader('Content-Type', 'video/mp4');
     res.sendFile(path.resolve(job.outputPath));

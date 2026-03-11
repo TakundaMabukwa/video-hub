@@ -1020,14 +1020,16 @@
       }
 
       const rows = jobs.slice(0, 20).map((j) => {
-        const canPlay = j.status === 'completed' && j.outputUrl;
-        const actionLabel = canPlay ? 'Play Saved Video' : (j.status === 'failed' ? 'View Error' : 'Track Job');
+        const canPlay = j.status === 'completed' && j.outputUrl && j.fileReady;
+        const actionLabel = canPlay
+          ? 'Play Saved Video'
+          : (j.status === 'failed' ? 'View Error' : (j.status === 'completed' ? 'Not Ready' : 'Track Job'));
         const label = `${j.vehicleId} ch${j.channel}`;
         const windowText = `${new Date(j.startTime).toLocaleString()} -> ${new Date(j.endTime).toLocaleString()}`;
         return `
           <div style="border:1px solid var(--border); border-radius:8px; padding:10px; margin-bottom:8px; background:#0f1728;">
             <div><strong>${label}</strong> | ${windowText}</div>
-            <div class="meta">Job ${j.id} | Status: ${j.status} | Created: ${new Date(j.createdAt).toLocaleString()}</div>
+            <div class="meta">Job ${j.id} | Status: ${j.status} | File: ${j.fileReady ? 'ready' : 'pending'} | Created: ${new Date(j.createdAt).toLocaleString()}</div>
             <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
               <button
                 data-play-job="${j.id}"
