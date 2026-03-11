@@ -1100,18 +1100,35 @@
         const startText = v.start_time ? new Date(v.start_time).toLocaleString() : 'n/a';
         const endText = v.end_time ? new Date(v.end_time).toLocaleString() : 'n/a';
         const url = v.url || '';
+        const ready = !!v.playable_ready;
+        const exists = !!v.source_exists;
+        const isOpen = !v.end_time;
         const label = `${v.device_id || 'vehicle'} ch${v.channel || 1}`;
+        const statusText = !exists
+          ? 'missing on disk'
+          : isOpen
+            ? 'recording in progress'
+            : ready
+              ? 'ready'
+              : 'preparing mp4';
         return `
           <div style="border:1px solid var(--border); border-radius:8px; padding:10px; margin-bottom:8px; background:#0f1728;">
             <div><strong>${label}</strong> | ${startText} → ${endText}</div>
-            <div class="meta">Type: ${v.video_type || 'live'} | Size: ${sizeMb} MB | ID: ${v.id}</div>
+            <div class="meta">Type: ${v.video_type || 'live'} | Size: ${sizeMb} MB | ID: ${v.id} | Status: ${statusText}</div>
             <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
-              <button
-                data-play-local="${v.id}"
-                data-local-url="${url}"
-                style="width:auto; padding:6px 10px;"
-              >Play Local Video</button>
-              ${url ? `<a href="${url}" target="_blank" rel="noopener" style="color:#6aa6ff;">Open</a>` : ''}
+              ${ready ? `
+                <button
+                  data-play-local="${v.id}"
+                  data-local-url="${url}"
+                  style="width:auto; padding:6px 10px;"
+                >Play Local Video</button>
+                ${url ? `<a href="${url}" target="_blank" rel="noopener" style="color:#6aa6ff;">Open</a>` : ''}
+              ` : `
+                <button
+                  data-prepare-local="${v.id}"
+                  style="width:auto; padding:6px 10px;"
+                >Prepare MP4</button>
+              `}
             </div>
           </div>
         `;
@@ -1732,15 +1749,29 @@
     });
     videoLocalListEl.addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-play-local]');
-      if (!btn) return;
-      const fileUrl = btn.getAttribute('data-local-url');
-      if (!fileUrl) {
-        setStatus('No playback URL available for this recording.', 'warn');
+      if (btn) {
+        const fileUrl = btn.getAttribute('data-local-url');
+        if (!fileUrl) {
+          setStatus('No playback URL available for this recording.', 'warn');
+          return;
+        }
+        videoReadyPlayerEl.src = fileUrl;
+        videoReadyPlayerEl.load();
+        setStatus('Loaded local recording in player.', 'ok');
         return;
       }
-      videoReadyPlayerEl.src = fileUrl;
-      videoReadyPlayerEl.load();
-      setStatus('Loaded local recording in player.', 'ok');
+      const prep = e.target.closest('button[data-prepare-local]');
+      if (!prep) return;
+      const id = prep.getAttribute('data-prepare-local');
+      if (!id) return;
+      setStatus('Preparing MP4 for playback...', 'ok');
+      fetch(`/api/videos/${encodeURIComponent(id)}/prepare`, { method: 'POST' })
+        .then(() => {
+          setTimeout(searchLocalVideos, 1500);
+        })
+        .catch(() => {
+          setStatus('Failed to start prepare job.', 'warn');
+        });
     });
     alertsEl.addEventListener('click', (e) => {
       const target = e.target.closest('button[data-request-video],button[data-open-videos],button[data-refresh-alert-video]');

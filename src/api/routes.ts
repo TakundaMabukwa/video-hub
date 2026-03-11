@@ -311,6 +311,16 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     transcodeCache.set(cacheKey, task);
     return task;
   };
+  const getPlayableVariantPath = (sourcePath: string, inputFpsHint?: number) => {
+    if (!sourcePath) return '';
+    if (/\.mp4$/i.test(sourcePath)) return sourcePath;
+    const safeInputFps = Number.isFinite(Number(inputFpsHint)) && Number(inputFpsHint) > 0
+      ? Math.max(0.2, Math.min(30, Number(inputFpsHint)))
+      : null;
+    const parsed = path.parse(sourcePath);
+    const fpsTag = safeInputFps ? `.fps${String(safeInputFps).replace('.', '_')}` : '';
+    return path.join(parsed.dir, `${parsed.name}${fpsTag}.playable.mp4`);
+  };
   const toPlayableMp4FromHttp = async (sourceUrl: string, cacheId: string) => {
     if (!sourceUrl) throw new Error('Missing source URL');
     if (/\.mp4(?:$|\?)/i.test(sourceUrl)) return sourceUrl;
@@ -3051,21 +3061,47 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       sql += ` ORDER BY start_time ASC LIMIT ${maxLimit}`;
 
       const result = await db.query(sql, params);
-      const videos = (result.rows || []).map((v: any) => ({
-        id: v.id,
-        device_id: v.device_id,
-        channel: v.channel,
-        video_type: v.video_type,
-        file_path: v.file_path,
-        storage_url: v.storage_url,
-        file_size: v.file_size,
-        start_time: v.start_time,
-        end_time: v.end_time,
-        duration_seconds: v.duration_seconds,
-        created_at: v.created_at,
-        alert_id: v.alert_id,
-        url: normalizePublicVideoUrl(v.storage_url || v.file_path, buildStoredVideoUrl(v.id))
-      }));
+      const videos = (result.rows || []).map((v: any) => {
+        const rawPath = String(v.file_path || '').trim();
+        const localPath = rawPath
+          ? (path.isAbsolute(rawPath) ? rawPath : path.join(process.cwd(), rawPath))
+          : '';
+        let sourceExists = false;
+        let playableReady = false;
+        try {
+          if (localPath && fs.existsSync(localPath)) {
+            sourceExists = true;
+            const playablePath = getPlayableVariantPath(localPath);
+            if (playablePath && fs.existsSync(playablePath)) {
+              const outStat = fs.statSync(playablePath);
+              const inStat = fs.statSync(localPath);
+              if (outStat.size > 0 && outStat.mtimeMs >= inStat.mtimeMs) {
+                playableReady = true;
+              }
+            }
+            if (/\.mp4$/i.test(localPath)) {
+              playableReady = true;
+            }
+          }
+        } catch {}
+        return {
+          id: v.id,
+          device_id: v.device_id,
+          channel: v.channel,
+          video_type: v.video_type,
+          file_path: v.file_path,
+          storage_url: v.storage_url,
+          file_size: v.file_size,
+          start_time: v.start_time,
+          end_time: v.end_time,
+          duration_seconds: v.duration_seconds,
+          created_at: v.created_at,
+          alert_id: v.alert_id,
+          source_exists: sourceExists,
+          playable_ready: playableReady,
+          url: normalizePublicVideoUrl(v.storage_url || v.file_path, buildStoredVideoUrl(v.id))
+        };
+      });
 
       return res.json({
         success: true,
@@ -3083,6 +3119,52 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       return res.status(500).json({
         success: false,
         message: 'Failed to fetch local videos',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
+  // Kick off playable MP4 generation for a stored video
+  router.post('/videos/:id/prepare', async (req, res) => {
+    const { id } = req.params;
+    try {
+      const db = require('../storage/database');
+      const result = await db.query(
+        `SELECT id, file_path FROM videos WHERE id = $1 LIMIT 1`,
+        [id]
+      );
+      if (!result.rows.length) {
+        return res.status(404).json({ success: false, message: 'Video not found' });
+      }
+      const rawPath = String(result.rows[0].file_path || '').trim();
+      if (!rawPath) {
+        return res.status(404).json({ success: false, message: 'Video file path missing' });
+      }
+      const localPath = path.isAbsolute(rawPath) ? rawPath : path.join(process.cwd(), rawPath);
+      if (!fs.existsSync(localPath)) {
+        return res.status(404).json({ success: false, message: 'Local video file not found' });
+      }
+      if (/\.mp4$/i.test(localPath)) {
+        return res.json({ success: true, status: 'ready' });
+      }
+
+      const playablePath = getPlayableVariantPath(localPath);
+      try {
+        if (playablePath && fs.existsSync(playablePath)) {
+          const outStat = fs.statSync(playablePath);
+          const inStat = fs.statSync(localPath);
+          if (outStat.size > 0 && outStat.mtimeMs >= inStat.mtimeMs) {
+            return res.json({ success: true, status: 'ready' });
+          }
+        }
+      } catch {}
+
+      void toPlayableMp4(localPath).catch(() => {});
+      return res.json({ success: true, status: 'queued' });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to prepare video',
         error: error?.message || String(error)
       });
     }
