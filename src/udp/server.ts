@@ -281,6 +281,7 @@ export class UDPRTPServer {
     if (streamInfo) {
       streamInfo.active = false;
       this.hlsStreamer.stopStream(vehicleId, channel);
+      this.videoWriter.stopRecording(vehicleId, channel);
       console.log(`Stream stopped: ${streamKey}`);
     }
   }

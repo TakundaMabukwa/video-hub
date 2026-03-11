@@ -9,12 +9,18 @@ export class VideoWriter {
   private videoIds = new Map<string, string>();
   private startTimes = new Map<string, Date>();
   private filePaths = new Map<string, string>();
+  private readonly segmentDurationMs = Math.max(10_000, Number(process.env.LIVE_SEGMENT_SECONDS || 60) * 1000);
 
   writeFrame(vehicleId: string, channel: number, frameData: Buffer): void {
     const streamKey = `${vehicleId}_${channel}`;
     
     if (!this.fileStreams.has(streamKey)) {
       this.createOutputStream(vehicleId, channel, streamKey);
+    } else {
+      const startTime = this.startTimes.get(streamKey);
+      if (startTime && Date.now() - startTime.getTime() >= this.segmentDurationMs) {
+        this.rotateSegment(vehicleId, channel, streamKey);
+      }
     }
 
     const stream = this.fileStreams.get(streamKey);
@@ -41,13 +47,14 @@ export class VideoWriter {
       fs.mkdirSync(recordingsDir, { recursive: true });
     }
 
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const startedAt = new Date();
+    const timestamp = startedAt.toISOString().replace(/[:.]/g, '-');
     const filename = `channel_${channel}_${timestamp}.h264`;
     const filepath = path.join(recordingsDir, filename);
     
     const stream = fs.createWriteStream(filepath);
     this.fileStreams.set(streamKey, stream);
-    this.startTimes.set(streamKey, new Date());
+    this.startTimes.set(streamKey, startedAt);
     this.filePaths.set(streamKey, filepath);
     
     stream.on('error', (error) => {
@@ -63,7 +70,7 @@ export class VideoWriter {
         vehicleId,
         channel,
         filepath,
-        new Date(),
+        startedAt,
         'live'
       );
       this.videoIds.set(streamKey, videoId);
@@ -72,27 +79,17 @@ export class VideoWriter {
     }
   }
 
-  stopRecording(vehicleId: string, channel: number): void {
-    const streamKey = `${vehicleId}_${channel}`;
+  private finalizeSegment(streamKey: string, vehicleId: string, channel: number): void {
     const stream = this.fileStreams.get(streamKey);
     
     if (stream) {
-      stream.end();
-      this.fileStreams.delete(streamKey);
-      
-      const frameCount = this.frameCounters.get(streamKey) || 0;
-      console.log(`Video recording stopped: vehicle ${vehicleId}, channel ${channel}, total frames ${frameCount}`);
-      this.frameCounters.delete(streamKey);
-      
-      // Update database with end time and file size
       const videoId = this.videoIds.get(streamKey);
       const startTime = this.startTimes.get(streamKey);
-      if (videoId && startTime) {
-        const endTime = new Date();
-        const duration = Math.floor((endTime.getTime() - startTime.getTime()) / 1000);
-        const filepath = this.filePaths.get(streamKey);
-        
-        if (filepath) {
+      const filepath = this.filePaths.get(streamKey);
+      stream.end(() => {
+        if (videoId && startTime && filepath) {
+          const endTime = new Date();
+          const duration = Math.max(1, Math.floor((endTime.getTime() - startTime.getTime()) / 1000));
           try {
             const stats = fs.statSync(filepath);
             this.videoStorage.updateVideoEnd(videoId, endTime, stats.size, duration).catch(console.error);
@@ -100,17 +97,32 @@ export class VideoWriter {
             console.error('Failed to update video metadata:', error);
           }
         }
-        
-        this.videoIds.delete(streamKey);
-        this.startTimes.delete(streamKey);
-        this.filePaths.delete(streamKey);
-      }
+      });
+      this.fileStreams.delete(streamKey);
+      
+      const frameCount = this.frameCounters.get(streamKey) || 0;
+      console.log(`Video recording stopped: vehicle ${vehicleId}, channel ${channel}, total frames ${frameCount}`);
+      this.frameCounters.delete(streamKey);
+      this.videoIds.delete(streamKey);
+      this.startTimes.delete(streamKey);
+      this.filePaths.delete(streamKey);
     }
   }
 
+  private rotateSegment(vehicleId: string, channel: number, streamKey: string): void {
+    this.finalizeSegment(streamKey, vehicleId, channel);
+    this.createOutputStream(vehicleId, channel, streamKey);
+  }
+
+  stopRecording(vehicleId: string, channel: number): void {
+    const streamKey = `${vehicleId}_${channel}`;
+    this.finalizeSegment(streamKey, vehicleId, channel);
+  }
+
   stopAllRecordings(): void {
-    for (const [streamKey, stream] of this.fileStreams.entries()) {
-      stream.end();
+    for (const [streamKey] of this.fileStreams.entries()) {
+      const [vehicleId, channelStr] = streamKey.split('_');
+      this.finalizeSegment(streamKey, vehicleId, Number(channelStr || 1));
       console.log(`Stopped recording: ${streamKey}`);
     }
     this.fileStreams.clear();

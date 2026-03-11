@@ -209,6 +209,7 @@ export class TCPRTPHandler {
   stopStream(vehicleId: string, channel: number): void {
     const streamKey = `${vehicleId}_${channel}`;
     this.hlsStreamer.stopStream(vehicleId, channel);
+    this.videoWriter.stopRecording(vehicleId, channel);
     this.activeStreams.delete(streamKey);
   }
 

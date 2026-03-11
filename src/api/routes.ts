@@ -204,6 +204,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     if (s && s.startsWith('/api/')) return s;
     return fallback;
   };
+  const buildStoredVideoUrl = (videoId: string) => `/api/videos/${encodeURIComponent(String(videoId))}/file`;
   const normalizePublicImageUrl = (img: any) => {
     const raw = String(img?.storage_url || '').trim();
     if (raw && /^https?:\/\//i.test(raw)) return raw;
@@ -1767,11 +1768,28 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           [id, row.device_id, fallbackFrom, fallbackTo, Number(row.channel || 1)]
         ),
         db.query(
-          `SELECT id, device_id, channel, video_type, file_path, storage_url, file_size, start_time, end_time, duration_seconds, created_at, alert_id
-           FROM videos
-           WHERE alert_id = $1
-           ORDER BY start_time DESC`,
-          [id]
+          `WITH direct AS (
+             SELECT id, device_id, channel, video_type, file_path, storage_url, file_size, start_time, end_time, duration_seconds, created_at, alert_id
+             FROM videos
+             WHERE alert_id = $1
+           ),
+           fallback AS (
+             SELECT id, device_id, channel, video_type, file_path, storage_url, file_size, start_time, end_time, duration_seconds, created_at, alert_id
+             FROM videos
+             WHERE alert_id IS NULL
+               AND device_id = $2
+               AND start_time BETWEEN $3 AND $4
+               AND channel BETWEEN GREATEST($5 - 1, 1) AND ($5 + 1)
+           )
+           SELECT DISTINCT ON (id)
+             id, device_id, channel, video_type, file_path, storage_url, file_size, start_time, end_time, duration_seconds, created_at, alert_id
+           FROM (
+             SELECT * FROM direct
+             UNION ALL
+             SELECT * FROM fallback
+           ) q
+           ORDER BY id, start_time DESC`,
+          [id, row.device_id, fallbackFrom, fallbackTo, Number(row.channel || 1)]
         )
       ]);
 
@@ -1797,7 +1815,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         duration: Number(v.duration_seconds || 0),
         fileSize: Number(v.file_size || 0),
         filePath: v.file_path,
-        url: normalizePublicVideoUrl(v.storage_url || v.file_path, `/api/alerts/${encodeURIComponent(id)}/video/camera`)
+        url: normalizePublicVideoUrl(v.storage_url || v.file_path, buildStoredVideoUrl(v.id))
       }));
 
       return res.json({
@@ -2137,6 +2155,70 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       return res.status(500).json({
         success: false,
         message: 'Failed to serve image file',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
+  // Serve stored video row by id. Local raw clips are transcoded to playable MP4 on demand.
+  router.get('/videos/:id/file', async (req, res) => {
+    const { id } = req.params;
+    try {
+      const db = require('../storage/database');
+      const result = await db.query(
+        `SELECT id, file_path, storage_url, device_id, channel, start_time, video_type
+         FROM videos
+         WHERE id = $1
+         LIMIT 1`,
+        [id]
+      );
+      if (!result.rows.length) {
+        return res.status(404).json({ success: false, message: 'Video not found' });
+      }
+      const row = result.rows[0];
+
+      const external = String(row.storage_url || '').trim();
+      if (external && /^https?:\/\//i.test(external)) {
+        let playable = external;
+        try {
+          playable = await toPlayableMp4FromHttp(external, `video:${id}`);
+        } catch {}
+        if (/^https?:\/\//i.test(playable)) {
+          return res.redirect(playable);
+        }
+        res.setHeader('Content-Type', /\.mp4$/i.test(playable) ? 'video/mp4' : 'video/h264');
+        return res.sendFile(path.resolve(playable));
+      }
+
+      const rawFilePath = String(row.file_path || '').trim();
+      if (!rawFilePath) {
+        return res.status(404).json({ success: false, message: 'Video file path missing' });
+      }
+      const localPath = path.isAbsolute(rawFilePath)
+        ? rawFilePath
+        : path.join(process.cwd(), rawFilePath);
+      if (!fs.existsSync(localPath)) {
+        return res.status(404).json({ success: false, message: 'Local video file not found' });
+      }
+
+      let playablePath = localPath;
+      let contentType = 'video/mp4';
+      try {
+        playablePath = await toPlayableMp4(localPath);
+      } catch {
+        contentType = /\.mp4$/i.test(localPath) ? 'video/mp4' : 'video/h264';
+      }
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader(
+        'Content-Disposition',
+        `inline; filename="${row.device_id || 'video'}_ch${row.channel || 1}_${id}${contentType === 'video/mp4' ? '.mp4' : '.h264'}"`
+      );
+      return res.sendFile(path.resolve(playablePath));
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to serve stored video',
         error: error?.message || String(error)
       });
     }
@@ -2544,7 +2626,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
             description: 'Camera SD post-incident clip requested automatically on alert'
           },
           // From videos table (database records)
-          database_records: videosResult.rows
+          database_records: videosResult.rows.map((v: any) => ({
+            ...v,
+            url: normalizePublicVideoUrl(v.storage_url || v.file_path, buildStoredVideoUrl(v.id))
+          }))
         },
         total_videos: videosResult.rows.length,
         has_pre_event: hasPreEvent,

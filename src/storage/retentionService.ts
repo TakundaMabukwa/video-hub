@@ -21,6 +21,7 @@ export class RetentionService {
   private readonly keepEvidenceDays = Math.max(0, Number(process.env.RETENTION_EVIDENCE_DAYS || 2));
   private readonly keepTranscodedDays = Math.max(0, Number(process.env.RETENTION_TRANSCODED_DAYS || 2));
   private readonly keepHlsHours = Math.max(1, Number(process.env.RETENTION_HLS_HOURS || 2));
+  private readonly keepLiveHours = Math.max(1, Number(process.env.RETENTION_LIVE_HOURS || 12));
   private readonly keepRawLogHours = Math.max(1, Number(process.env.RETENTION_RAW_LOG_HOURS || 24));
 
   start(): void {
@@ -43,12 +44,12 @@ export class RetentionService {
       const disk = this.getRootDiskUsagePercent();
       const emergency = disk >= this.emergencyDiskUsePct;
       const constrained = disk >= this.maxDiskUsePct;
+      const now = Date.now();
 
       const stats: PruneStats = { deletedFiles: 0, deletedBytes: 0, deletedDbRows: 0 };
 
       stats.deletedDbRows += await this.pruneOrphanVideoRows();
-
-      const now = Date.now();
+      stats.deletedDbRows += await this.pruneLiveVideoRows(now - this.keepLiveHours * 3600_000, stats);
       this.pruneByAge(path.join(process.cwd(), 'hls'), now - this.keepHlsHours * 3600_000, stats);
       this.pruneByAge(path.join(process.cwd(), 'recordings', 'transcoded'), now - this.keepTranscodedDays * 24 * 3600_000, stats);
       this.pruneByAge(path.join(process.cwd(), 'logs', 'raw-ingest.ndjson'), now - this.keepRawLogHours * 3600_000, stats, true);
@@ -161,5 +162,57 @@ export class RetentionService {
     if (staleIds.length === 0) return 0;
     await query(`DELETE FROM videos WHERE id = ANY($1::uuid[])`, [staleIds]);
     return staleIds.length;
+  }
+
+  private removePlayableVariants(filePath: string, stats: PruneStats): void {
+    try {
+      const parsed = path.parse(filePath);
+      const dir = parsed.dir;
+      const prefix = `${parsed.name}.`;
+      if (!fs.existsSync(dir)) return;
+      for (const entry of fs.readdirSync(dir)) {
+        if (!entry.startsWith(prefix) || !entry.endsWith('.playable.mp4')) continue;
+        const full = path.join(dir, entry);
+        if (!fs.existsSync(full)) continue;
+        const st = fs.statSync(full);
+        fs.unlinkSync(full);
+        stats.deletedFiles += 1;
+        stats.deletedBytes += st.size || 0;
+      }
+    } catch {}
+  }
+
+  private async pruneLiveVideoRows(cutoffMs: number, stats: PruneStats): Promise<number> {
+    const cutoff = new Date(cutoffMs);
+    const res = await query(
+      `SELECT id, file_path, storage_url
+       FROM videos
+       WHERE video_type = 'live'
+         AND alert_id IS NULL
+         AND COALESCE(end_time, start_time) < $1`,
+      [cutoff]
+    );
+
+    const deleteIds: string[] = [];
+    for (const row of res.rows || []) {
+      const rawPath = String(row.file_path || '').trim();
+      const localPath = rawPath
+        ? (path.isAbsolute(rawPath) ? rawPath : path.join(process.cwd(), rawPath))
+        : '';
+      if (localPath && fs.existsSync(localPath)) {
+        try {
+          const st = fs.statSync(localPath);
+          fs.unlinkSync(localPath);
+          stats.deletedFiles += 1;
+          stats.deletedBytes += st.size || 0;
+          this.removePlayableVariants(localPath, stats);
+        } catch {}
+      }
+      deleteIds.push(String(row.id));
+    }
+
+    if (deleteIds.length === 0) return 0;
+    await query(`DELETE FROM videos WHERE id = ANY($1::uuid[])`, [deleteIds]);
+    return deleteIds.length;
   }
 }
