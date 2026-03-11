@@ -152,13 +152,11 @@ export class JTT808Server {
     this.alertManager.on('request-screenshot', ({ vehicleId, channel, alertId }) => {
       const channels = this.resolveAlertCaptureChannels(vehicleId, channel);
       for (const ch of channels) {
-        this.startVideo(vehicleId, ch);
         console.log(`Alert ${alertId}: Requesting screenshot from ${vehicleId} channel ${ch}`);
         void this.requestScreenshotWithFallback(vehicleId, ch, {
           fallback: true,
           fallbackDelayMs: 700,
           alertId,
-          preferFrameFirst: true,
           captureVideoEvidence: true,
           videoDurationSec: 8
         });
@@ -169,7 +167,6 @@ export class JTT808Server {
     this.alertManager.on('request-camera-video', ({ vehicleId, channel, startTime, endTime, alertId }) => {
       const channels = this.resolveAlertCaptureChannels(vehicleId, channel);
       for (const ch of channels) {
-        this.startVideo(vehicleId, ch);
         console.log(`Alert ${alertId}: Requesting camera SD card video from ${vehicleId} channel ${ch}`);
         this.scheduleCameraReportRequests(vehicleId, ch, startTime, endTime, {
           queryResources: true,
@@ -1211,10 +1208,7 @@ export class JTT808Server {
     const channels = [
       ...(channelsFromCapabilities || []),
       ...channelsFromActiveStreams,
-      ...(Number.isFinite(requested) && requested > 0 ? [requested] : []),
-      // Always include both camera channels for alert evidence collection.
-      1,
-      2
+      ...(Number.isFinite(requested) && requested > 0 ? [requested] : [])
     ];
 
     if (channels && channels.length > 0) {

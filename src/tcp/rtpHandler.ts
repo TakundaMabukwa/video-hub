@@ -45,7 +45,7 @@ export class TCPRTPHandler {
       console.log(`[RTP] HLS stream started: ${streamKey}`);
     }
 
-    const completeFrame = this.frameAssembler.assembleFrame(header, payload, dataType, vehicleId);
+    const completeFrame = this.frameAssembler.assembleFrame(header, payload, dataType);
     if (!completeFrame) return;
 
     this.frameCount++;

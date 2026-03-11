@@ -19,7 +19,7 @@ export class LiveVideoStreamServer {
   constructor(tcpServer: JTT808Server, path = '/ws/video') {
     this.tcpServer = tcpServer;
     this.path = path;
-    this.keepStreamsWithoutClients = String(process.env.KEEP_STREAMS_WITHOUT_CLIENTS ?? 'true').toLowerCase() !== 'false';
+    this.keepStreamsWithoutClients = String(process.env.KEEP_STREAMS_WITHOUT_CLIENTS ?? 'false').toLowerCase() === 'true';
     this.wss = new WebSocket.Server({
       noServer: true
     });

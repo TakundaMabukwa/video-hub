@@ -125,7 +125,9 @@ const API_PORT = parseInt(process.env.API_PORT || '3000');
 const SERVER_IP = process.env.SERVER_IP || 'localhost';
 const AUTO_SCREENSHOT_INTERVAL_MS = parseInt(process.env.AUTO_SCREENSHOT_INTERVAL_MS || '30000');
 const AUTO_SCREENSHOT_FALLBACK_DELAY_MS = parseInt(process.env.AUTO_SCREENSHOT_FALLBACK_DELAY_MS || '600');
-const KEEP_STREAMS_WITHOUT_CLIENTS = String(process.env.KEEP_STREAMS_WITHOUT_CLIENTS ?? 'true').toLowerCase() !== 'false';
+const KEEP_STREAMS_WITHOUT_CLIENTS = String(process.env.KEEP_STREAMS_WITHOUT_CLIENTS ?? 'false').toLowerCase() === 'true';
+const BACKGROUND_STREAMS_ENABLED = String(process.env.BACKGROUND_STREAMS_ENABLED ?? 'false').toLowerCase() === 'true';
+const AUTO_SCREENSHOT_FANOUT_ENABLED = String(process.env.AUTO_SCREENSHOT_FANOUT_ENABLED ?? 'false').toLowerCase() === 'true';
 const BACKGROUND_STREAM_INTERVAL_MS = parseInt(process.env.BACKGROUND_STREAM_INTERVAL_MS || '45000');
 
 async function startServer() {
@@ -273,7 +275,7 @@ async function startServer() {
 
   // Keep camera streams alive in backend mode (independent of UI subscribers).
   const ensureBackgroundStreams = () => {
-    if (!KEEP_STREAMS_WITHOUT_CLIENTS) return;
+    if (!BACKGROUND_STREAMS_ENABLED) return;
     const connected = tcpServer.getVehicles().filter(v => v.connected);
     for (const v of connected) {
       const fromCapabilities = (v.channels || [])
@@ -290,6 +292,9 @@ async function startServer() {
 
   // Server-side screenshot fanout scheduler: keep recent screenshots updated for all connected vehicles/channels.
   const runAutoScreenshotFanout = async () => {
+    if (!AUTO_SCREENSHOT_FANOUT_ENABLED) {
+      return;
+    }
     const connected = tcpServer.getVehicles().filter(v => v.connected);
     if (connected.length === 0) {
       return;
@@ -330,18 +335,24 @@ async function startServer() {
     console.log(`Auto screenshot fanout: ${ok} success, ${fail} failed`);
   };
 
-  setTimeout(() => {
-    ensureBackgroundStreams();
-    void runAutoScreenshotFanout();
-  }, 5000);
+  if (BACKGROUND_STREAMS_ENABLED || AUTO_SCREENSHOT_FANOUT_ENABLED) {
+    setTimeout(() => {
+      ensureBackgroundStreams();
+      void runAutoScreenshotFanout();
+    }, 5000);
+  }
 
-  setInterval(() => {
-    ensureBackgroundStreams();
-  }, BACKGROUND_STREAM_INTERVAL_MS);
+  if (BACKGROUND_STREAMS_ENABLED) {
+    setInterval(() => {
+      ensureBackgroundStreams();
+    }, BACKGROUND_STREAM_INTERVAL_MS);
+  }
 
-  setInterval(() => {
-    void runAutoScreenshotFanout();
-  }, AUTO_SCREENSHOT_INTERVAL_MS);
+  if (AUTO_SCREENSHOT_FANOUT_ENABLED) {
+    setInterval(() => {
+      void runAutoScreenshotFanout();
+    }, AUTO_SCREENSHOT_INTERVAL_MS);
+  }
   
   // Alert reminder scheduler - Check for unattended alerts every 5 minutes
   setInterval(async () => {

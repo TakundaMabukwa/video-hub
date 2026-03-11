@@ -18,7 +18,7 @@ export class FrameAssembler {
   private spsCache = new Map<string, Buffer>();
   private ppsCache = new Map<string, Buffer>();
 
-  assembleFrame(header: JTT1078RTPHeader, payload: Buffer, dataType: number, sourceId?: string): Buffer | null {
+  assembleFrame(header: JTT1078RTPHeader, payload: Buffer, dataType: number): Buffer | null {
     // Aggressive cleanup
     if (Date.now() - this.lastCleanup > this.CLEANUP_INTERVAL) {
       this.cleanupOldFrames();
@@ -33,8 +33,7 @@ export class FrameAssembler {
     }
     
     // Use only simCard + channel as key (timestamp changes per packet!)
-    const streamSource = sourceId && sourceId.trim() ? sourceId.trim() : header.simCard;
-    const key = `${streamSource}_${header.channelNumber}`;
+    const key = `${header.simCard}_${header.channelNumber}`;
     
     console.log(`📦 RTP: ${header.simCard}_ch${header.channelNumber}, seq=${header.sequenceNumber}, flag=${header.subpackageFlag}, size=${payload.length}`);
 

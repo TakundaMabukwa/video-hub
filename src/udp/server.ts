@@ -97,7 +97,7 @@ export class UDPRTPServer {
       console.log(`🎬 HLS stream started: ${streamKey}`);
     }
 
-    const completeFrame = this.frameAssembler.assembleFrame(header, payload, dataType, vehicleId);
+    const completeFrame = this.frameAssembler.assembleFrame(header, payload, dataType);
     if (completeFrame) {
       streamInfo.frameCount++;
       streamInfo.lastFrame = new Date();
