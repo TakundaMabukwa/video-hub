@@ -37,11 +37,12 @@ export class FrameAssembler {
     
     console.log(`📦 RTP: ${header.simCard}_ch${header.channelNumber}, seq=${header.sequenceNumber}, flag=${header.subpackageFlag}, size=${payload.length}`);
 
-    this.extractParameterSets(payload, key);
+    const normalized = this.normalizeAnnexB(payload);
+    this.extractParameterSets(normalized, key);
 
     if (header.subpackageFlag === JTT1078SubpackageFlag.ATOMIC) {
       console.log(`   ✅ ATOMIC - complete frame`);
-      return this.prependParameterSets(payload, key);
+      return this.prependParameterSets(normalized, key);
     }
 
     if (header.subpackageFlag === JTT1078SubpackageFlag.FIRST) {
@@ -49,7 +50,7 @@ export class FrameAssembler {
       this.frameBuffers.set(key, {
         timestamp: header.timestamp?.toString() || Date.now().toString(),
         channelNumber: header.channelNumber,
-        parts: [payload],
+        parts: [normalized],
         expectedSequence: header.sequenceNumber + 1,
         startTime: Date.now(),
         dataType
@@ -64,17 +65,44 @@ export class FrameAssembler {
     }
 
     // Accept MIDDLE/LAST packets (don't enforce strict sequence)
-    frameBuffer.parts.push(payload);
+    frameBuffer.parts.push(normalized);
     console.log(`   🔗 Added part ${frameBuffer.parts.length}`);
 
     if (header.subpackageFlag === JTT1078SubpackageFlag.LAST) {
       console.log(`   ✅ LAST - assembling ${frameBuffer.parts.length} parts`);
       const completeFrame = Buffer.concat(frameBuffer.parts);
       this.frameBuffers.delete(key);
-      return this.prependParameterSets(completeFrame, key);
+      return this.prependParameterSets(this.normalizeAnnexB(completeFrame), key);
     }
 
     return null;
+  }
+
+  private normalizeAnnexB(payload: Buffer): Buffer {
+    if (!payload || payload.length < 4) return payload;
+    // Detect Annex B start codes
+    for (let i = 0; i < payload.length - 3; i++) {
+      if (payload[i] === 0x00 && payload[i + 1] === 0x00 &&
+          (payload[i + 2] === 0x01 || (payload[i + 2] === 0x00 && payload[i + 3] === 0x01))) {
+        return payload;
+      }
+    }
+
+    // Try length-prefixed (AVCC) to Annex B conversion
+    const out: Buffer[] = [];
+    let offset = 0;
+    while (offset + 4 <= payload.length) {
+      const nalLen = payload.readUInt32BE(offset);
+      offset += 4;
+      if (nalLen <= 0 || offset + nalLen > payload.length) {
+        return payload; // fallback to original if malformed
+      }
+      const nal = payload.slice(offset, offset + nalLen);
+      out.push(Buffer.from([0x00, 0x00, 0x00, 0x01]));
+      out.push(nal);
+      offset += nalLen;
+    }
+    return out.length ? Buffer.concat(out) : payload;
   }
 
   private extractParameterSets(payload: Buffer, streamKey: string): void {

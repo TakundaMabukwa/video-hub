@@ -125,6 +125,7 @@ export class ReplayService {
     const stream = fs.createReadStream(filePath);
     let buffer = Buffer.alloc(0);
     let lastStart = -1;
+    let assumeLengthPrefixed = false;
 
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     const emitNal = async (nal: Buffer) => {
@@ -157,39 +158,70 @@ export class ReplayService {
       const len = buffer.length;
       const starts: number[] = [];
 
-      for (let i = 0; i < len - 3; i++) {
-        if (i + 3 < len && buffer[i] === 0x00 && buffer[i + 1] === 0x00 &&
-            buffer[i + 2] === 0x00 && buffer[i + 3] === 0x01) {
-          starts.push(i);
-          i += 3;
-          continue;
-        }
-        if (buffer[i] === 0x00 && buffer[i + 1] === 0x00 && buffer[i + 2] === 0x01) {
-          starts.push(i);
-          i += 2;
+      if (!assumeLengthPrefixed) {
+        for (let i = 0; i < len - 3; i++) {
+          if (i + 3 < len && buffer[i] === 0x00 && buffer[i + 1] === 0x00 &&
+              buffer[i + 2] === 0x00 && buffer[i + 3] === 0x01) {
+            starts.push(i);
+            i += 3;
+            continue;
+          }
+          if (buffer[i] === 0x00 && buffer[i + 1] === 0x00 && buffer[i + 2] === 0x01) {
+            starts.push(i);
+            i += 2;
+          }
         }
       }
 
-      for (const start of starts) {
-        if (lastStart >= 0 && start > lastStart) {
-          const nal = buffer.slice(lastStart, start);
-          const ok = await emitNal(nal);
+      if (!assumeLengthPrefixed && starts.length === 0 && buffer.length > 4096) {
+        // No start codes detected in a decent chunk; assume length-prefixed.
+        assumeLengthPrefixed = true;
+      }
+
+      if (!assumeLengthPrefixed) {
+        for (const start of starts) {
+          if (lastStart >= 0 && start > lastStart) {
+            const nal = buffer.slice(lastStart, start);
+            const ok = await emitNal(nal);
+            if (!ok) return;
+          }
+          lastStart = start;
+        }
+
+        if (lastStart > 0) {
+          buffer = buffer.slice(lastStart);
+          lastStart = 0;
+        } else if (buffer.length > 2 * 1024 * 1024) {
+          buffer = Buffer.alloc(0);
+          lastStart = -1;
+        }
+      } else {
+        // Length-prefixed parsing
+        while (buffer.length >= 4) {
+          const nalLen = buffer.readUInt32BE(0);
+          if (nalLen <= 0 || nalLen > buffer.length - 4) break;
+          const nal = buffer.slice(4, 4 + nalLen);
+          const withStart = Buffer.concat([Buffer.from([0x00, 0x00, 0x00, 0x01]), nal]);
+          const ok = await emitNal(withStart);
           if (!ok) return;
+          buffer = buffer.slice(4 + nalLen);
         }
-        lastStart = start;
-      }
-
-      if (lastStart > 0) {
-        buffer = buffer.slice(lastStart);
-        lastStart = 0;
-      } else if (buffer.length > 2 * 1024 * 1024) {
-        buffer = Buffer.alloc(0);
-        lastStart = -1;
       }
     }
 
-    if (lastStart >= 0 && buffer.length > 0) {
-      await emitNal(buffer);
+    if (!assumeLengthPrefixed) {
+      if (lastStart >= 0 && buffer.length > 0) {
+        await emitNal(buffer);
+      }
+    } else {
+      while (buffer.length >= 4) {
+        const nalLen = buffer.readUInt32BE(0);
+        if (nalLen <= 0 || nalLen > buffer.length - 4) break;
+        const nal = buffer.slice(4, 4 + nalLen);
+        const withStart = Buffer.concat([Buffer.from([0x00, 0x00, 0x00, 0x01]), nal]);
+        await emitNal(withStart);
+        buffer = buffer.slice(4 + nalLen);
+      }
     }
   }
 }
