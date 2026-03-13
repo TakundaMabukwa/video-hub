@@ -474,6 +474,171 @@ export function createRoutes(
 
     return { id, outputUrl };
   };
+  const buildStoredWindowVideoJob = (
+    vehicleId: string,
+    channel: number,
+    start: Date,
+    end: Date,
+    segments: Array<{
+      id: string;
+      file_path: string;
+      start_time: string | Date;
+      end_time?: string | Date | null;
+      duration_seconds?: number | null;
+      alert_id?: string | null;
+    }>,
+    options?: {
+      alertId?: string;
+    }
+  ) => {
+    const id = `JOB-LOCAL-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const now = new Date().toISOString();
+    const durationSec = Math.max(1, Math.min(300, Math.ceil((end.getTime() - start.getTime()) / 1000)));
+    const outputDir = path.join(process.cwd(), 'recordings', vehicleId, 'manual');
+    const outputName = `${id}_ch${channel}.mp4`;
+    const outputPath = path.join(outputDir, outputName);
+    const outputUrl = `/api/videos/jobs/${encodeURIComponent(id)}/file`;
+    const job = {
+      id,
+      vehicleId,
+      channel,
+      startTime: start.toISOString(),
+      endTime: end.toISOString(),
+      alertId: options?.alertId,
+      status: 'queued' as const,
+      createdAt: now,
+      updatedAt: now,
+      outputPath,
+      outputUrl
+    };
+    manualVideoJobs.set(id, job);
+
+    setTimeout(async () => {
+      const current = manualVideoJobs.get(id);
+      if (!current) return;
+      current.status = 'running';
+      current.updatedAt = new Date().toISOString();
+      manualVideoJobs.set(id, current);
+
+      try {
+        fs.mkdirSync(outputDir, { recursive: true });
+      } catch {}
+
+      const concatFilePath = path.join(outputDir, `${id}.concat.txt`);
+
+      try {
+        const preparedSources: Array<{ path: string; startTime: Date }> = [];
+        for (const segment of segments) {
+          const rawPath = String(segment?.file_path || '').trim();
+          if (!rawPath) continue;
+          const localPath = path.isAbsolute(rawPath) ? rawPath : path.join(process.cwd(), rawPath);
+          if (!fs.existsSync(localPath)) continue;
+
+          const playablePath = /\.mp4$/i.test(localPath)
+            ? localPath
+            : await toPlayableMp4(localPath);
+          if (!playablePath || !fs.existsSync(playablePath)) continue;
+
+          const segmentStart = new Date(segment.start_time);
+          if (Number.isNaN(segmentStart.getTime())) continue;
+          preparedSources.push({
+            path: playablePath,
+            startTime: segmentStart
+          });
+        }
+
+        if (preparedSources.length === 0) {
+          throw new Error('No stored video segments available for requested range');
+        }
+
+        preparedSources.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+        const concatBody = preparedSources
+          .map((source) => {
+            const normalizedPath = source.path.replace(/\\/g, '/').replace(/'/g, "'\\''");
+            return `file '${normalizedPath}'`;
+          })
+          .join('\n');
+        fs.writeFileSync(concatFilePath, concatBody, 'utf8');
+
+        const firstStart = preparedSources[0].startTime;
+        const trimOffsetSec = Math.max(0, (start.getTime() - firstStart.getTime()) / 1000);
+        const copyProfile = [
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-y',
+          '-f',
+          'concat',
+          '-safe',
+          '0',
+          '-i',
+          concatFilePath,
+          '-ss',
+          trimOffsetSec.toFixed(3),
+          '-t',
+          String(durationSec),
+          '-c',
+          'copy',
+          '-movflags',
+          '+faststart',
+          outputPath
+        ];
+        const transcodeProfile = [
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-y',
+          '-f',
+          'concat',
+          '-safe',
+          '0',
+          '-i',
+          concatFilePath,
+          '-ss',
+          trimOffsetSec.toFixed(3),
+          '-t',
+          String(durationSec),
+          '-c:v',
+          'libx264',
+          '-preset',
+          'veryfast',
+          '-pix_fmt',
+          'yuv420p',
+          '-movflags',
+          '+faststart',
+          outputPath
+        ];
+
+        await runFfmpegProfiles([copyProfile, transcodeProfile], outputPath);
+
+        const finalJob = manualVideoJobs.get(id);
+        if (!finalJob) return;
+        finalJob.status = 'completed';
+        finalJob.updatedAt = new Date().toISOString();
+        manualVideoJobs.set(id, finalJob);
+        void persistManualJobVideo(finalJob).catch((err: any) => {
+          const latest = manualVideoJobs.get(id);
+          if (!latest) return;
+          latest.error = `Persist failed: ${err?.message || 'unknown error'}`;
+          latest.updatedAt = new Date().toISOString();
+          manualVideoJobs.set(id, latest);
+        });
+      } catch (error: any) {
+        const failed = manualVideoJobs.get(id);
+        if (!failed) return;
+        failed.status = 'failed';
+        failed.error = error?.message || String(error);
+        failed.updatedAt = new Date().toISOString();
+        manualVideoJobs.set(id, failed);
+      } finally {
+        try {
+          if (fs.existsSync(concatFilePath)) fs.unlinkSync(concatFilePath);
+        } catch {}
+      }
+    }, 50);
+
+    return { id, outputUrl };
+  };
   const toNumericLimit = (value: unknown, fallback: number, min = 1, max = 500) => {
     const n = Number(value);
     if (!Number.isFinite(n)) return fallback;
@@ -3124,6 +3289,76 @@ export function createRoutes(
       return res.status(500).json({
         success: false,
         message: 'Failed to fetch local videos',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
+  // Build a single playable clip from locally stored recordings for an exact time window.
+  router.post('/vehicles/:id/videos/window', async (req, res) => {
+    const { id } = req.params;
+    const { channel = 1, startTime, endTime, alertId } = req.body || {};
+
+    if (!startTime || !endTime) {
+      return res.status(400).json({
+        success: false,
+        message: 'startTime and endTime are required (ISO timestamp)'
+      });
+    }
+
+    const start = new Date(startTime);
+    const end = new Date(endTime);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid time range'
+      });
+    }
+
+    const ch = Number(channel) || 1;
+    try {
+      const db = require('../storage/database');
+      const result = await db.query(
+        `SELECT id, file_path, start_time, end_time, duration_seconds, alert_id
+         FROM videos
+         WHERE device_id = $1
+           AND channel = $2
+           AND start_time <= $3
+           AND COALESCE(end_time, start_time) >= $4
+         ORDER BY start_time ASC`,
+        [id, ch, end, start]
+      );
+
+      const rows = (result.rows || []).filter((row: any) => String(row?.file_path || '').trim());
+      if (rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'No stored local recordings found in selected range'
+        });
+      }
+
+      const job = buildStoredWindowVideoJob(id, ch, start, end, rows, {
+        alertId: String(alertId || '').trim() || undefined
+      });
+
+      return res.json({
+        success: true,
+        message: `Stored video window job queued for ${id} channel ${ch}`,
+        data: {
+          vehicleId: id,
+          channel: ch,
+          startTime: start.toISOString(),
+          endTime: end.toISOString(),
+          playbackJobId: job.id,
+          playbackJobUrl: `/api/videos/jobs/${encodeURIComponent(job.id)}`,
+          outputUrl: job.outputUrl,
+          sourceSegments: rows.length
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to build local video window',
         error: error?.message || String(error)
       });
     }
