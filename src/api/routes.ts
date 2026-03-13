@@ -218,6 +218,40 @@ export function createRoutes(
     return '';
   };
   const transcodeCache = new Map<string, Promise<string>>();
+
+  const buildStreamUrl = (vehicleId: string, channel: number) =>
+    `/api/stream/${encodeURIComponent(String(vehicleId))}/${encodeURIComponent(String(channel))}/playlist.m3u8`;
+
+  const startLiveStreamForVehicle = (vehicleId: string, channel: number): boolean => {
+    try {
+      const started = tcpServer.startVideo(vehicleId, channel);
+      if (started) {
+        udpServer.startHLSStream(vehicleId, channel);
+        return true;
+      }
+    } catch {}
+    return false;
+  };
+
+  const queryStoredVideoSegments = async (vehicleId: string, channel: number, start: Date, end: Date) => {
+    const db = require('../storage/database');
+    const result = await db.query(
+      `SELECT id, file_path, start_time, end_time, duration_seconds, alert_id
+       FROM videos
+       WHERE device_id = $1
+         AND channel = $2
+         AND start_time <= $3
+         AND COALESCE(end_time, start_time) >= $4
+       ORDER BY start_time ASC`,
+      [vehicleId, channel, end, start]
+    );
+    return (result.rows || [])
+      .map((row: any) => ({
+        ...row,
+        file_path: String(row?.file_path || '').trim()
+      }))
+      .filter((row: any) => !!row.file_path);
+  };
   const getFfmpegBinary = () => {
     if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
     try {
@@ -2502,7 +2536,7 @@ export function createRoutes(
     try {
       const db = require('../storage/database');
       const result = await db.query(
-        `SELECT id, metadata FROM alerts WHERE id = $1`,
+        `SELECT id, device_id, channel, timestamp, metadata FROM alerts WHERE id = $1`,
         [id]
       );
 
@@ -2518,12 +2552,50 @@ export function createRoutes(
       const videoClips = metadata?.videoClips || {};
       const source = resolveAlertClipSource(videoClips, type);
       const fpsHint = getAlertClipFpsHint(videoClips, type);
+      const rawVehicle = String(result.rows[0].device_id || '').trim();
+      const rawChannel = Number(result.rows[0].channel || 1);
+      const channel = Number.isFinite(rawChannel) && rawChannel > 0 ? rawChannel : 1;
+      const alertTs = new Date(result.rows[0]?.timestamp);
+      const fallbackStart = Number.isNaN(alertTs.getTime())
+        ? new Date(Date.now() - 30 * 1000)
+        : new Date(alertTs.getTime() - 30 * 1000);
+      const fallbackEnd = Number.isNaN(alertTs.getTime())
+        ? new Date(Date.now() + 30 * 1000)
+        : new Date(alertTs.getTime() + 30 * 1000);
 
       if (!source) {
-        return res.status(404).json({
-          success: false,
-          message: `${type} clip not found`
-        });
+        if (rawVehicle) {
+          try {
+            const rows = await queryStoredVideoSegments(rawVehicle, channel, fallbackStart, fallbackEnd);
+            const activeChannelRows = rows.filter((row: any) => Number(row?.channel || channel) === channel);
+            const segmentRows = activeChannelRows.length ? activeChannelRows : rows;
+            if (segmentRows.length > 0) {
+              const job = buildStoredWindowVideoJob(rawVehicle, channel, fallbackStart, fallbackEnd, segmentRows, {
+                alertId: id
+              });
+              return res.redirect(`/api/videos/jobs/${encodeURIComponent(job.id)}/file`);
+            }
+          } catch (fallbackErr) {
+            console.error(`Failed fallback local window for alert ${id} ${type}:`, fallbackErr);
+          }
+        }
+
+        const liveChannel = Number.isFinite(rawChannel) && rawChannel > 0 ? rawChannel : 1;
+        const liveStarted = rawVehicle ? startLiveStreamForVehicle(rawVehicle, liveChannel) : false;
+        if (rawVehicle && !liveStarted) {
+          return res.status(409).json({
+            success: false,
+            message: `${type} clip missing and live stream is not available`,
+            fallback: {
+              type: 'live',
+              vehicleId: rawVehicle,
+              channel: liveChannel,
+              streamStarted: liveStarted,
+              streamUrl: buildStreamUrl(rawVehicle, liveChannel)
+            }
+          });
+        }
+        return res.redirect(buildStreamUrl(rawVehicle || '0', liveChannel));
       }
 
       if (/^https?:\/\//i.test(source)) {
@@ -2876,7 +2948,30 @@ export function createRoutes(
       const endTime = new Date(alertTimestamp!.getTime() + forwardSeconds * 1000);
 
       const targetChannels = getVehicleChannels(vehicleId, channel);
-      const perChannel = targetChannels.map((ch) => {
+      const storedWindowSeconds = Math.max(30, lookbackSeconds + forwardSeconds + 2);
+      const perChannel = await Promise.all(targetChannels.map(async (ch) => {
+        const fallbackStart = new Date(startTime.getTime() - Math.max(0, storedWindowSeconds - (endTime.getTime() - startTime.getTime())));
+        const fallbackEnd = new Date(endTime.getTime() + Math.max(0, storedWindowSeconds - (endTime.getTime() - startTime.getTime())));
+        const rows = await queryStoredVideoSegments(vehicleId, ch, fallbackStart, fallbackEnd);
+        const segmentRows = rows.filter((row: any) => Number(row?.channel || ch) === ch);
+        if (segmentRows.length > 0) {
+          const storageJob = buildStoredWindowVideoJob(vehicleId, ch, startTime, endTime, segmentRows, {
+            alertId: id
+          });
+          return {
+            channel: ch,
+            storageAvailable: true,
+            storageJob: storageJob,
+            scheduled: {
+              querySent: false,
+              requested: false,
+              queued: false,
+              downloadSent: false
+            },
+            manualCaptureJob: null
+          };
+        }
+
         const scheduled = tcpServer.scheduleCameraReportRequests(vehicleId, ch, startTime, endTime, {
           queryResources,
           requestDownload
@@ -2884,16 +2979,86 @@ export function createRoutes(
         const manualCaptureJob = scheduled.requested
           ? buildManualVideoJob(vehicleId!, ch, startTime, endTime, { alertId: id })
           : null;
-        return { channel: ch, scheduled, manualCaptureJob };
-      });
+        return {
+          channel: ch,
+          storageAvailable: false,
+          storageJob: null,
+          scheduled,
+          manualCaptureJob
+        };
+      }));
 
-      const queried = perChannel.some((x) => x.scheduled.querySent);
-      const requested = perChannel.some((x) => x.scheduled.requested);
-      const queued = perChannel.some((x) => x.scheduled.queued);
-      const downloadRequested = perChannel.some((x) => x.scheduled.downloadSent);
+      const firstStorage = perChannel.find((x) => x.storageJob);
+      const queried = perChannel.some((x) => x.scheduled?.querySent);
+      const requested = perChannel.some((x) => x.scheduled?.requested);
+      const queued = perChannel.some((x) => x.scheduled?.queued);
+      const downloadRequested = perChannel.some((x) => x.scheduled?.downloadSent);
       const manualCaptureJob = perChannel.find((x) => !!x.manualCaptureJob)?.manualCaptureJob || null;
+      const fallbackChannel = Number(targetChannels?.[0]) || channel;
+      const liveStarted = tcpServer.getVehicle(vehicleId)?.connected
+        ? startLiveStreamForVehicle(vehicleId, fallbackChannel)
+        : false;
+
+      if (firstStorage?.storageJob) {
+        return res.json({
+          success: true,
+          message: `Local stored window job available for alert ${id}`,
+          data: {
+            alertId: id,
+            vehicleId,
+            channel,
+            channelsRequested: targetChannels,
+            alertTimestamp: alertTimestamp!.toISOString(),
+            startTime: startTime.toISOString(),
+            endTime: endTime.toISOString(),
+            lookbackSeconds,
+            forwardSeconds,
+            queryResources,
+            querySent: false,
+            requestSent: false,
+            requestDownload,
+            downloadRequestSent: false,
+            playbackSource: 'stored_window',
+            playbackJobId: firstStorage.storageJob.id,
+            playbackJobUrl: firstStorage.storageJob.outputUrl,
+            channels: perChannel.map((entry) => ({
+              channel: entry.channel,
+              source: entry.storageJob ? 'stored_window' : 'live_request',
+              jobId: entry.storageJob ? entry.storageJob.id : (entry.manualCaptureJob?.id || null)
+            }))
+          }
+        });
+      }
 
       if (!requested && !queued) {
+        if (liveStarted) {
+          return res.json({
+            success: true,
+            message: `Vehicle connected but no stored data for this window. Live fallback started for ${vehicleId} channel ${fallbackChannel}`,
+            data: {
+              alertId: id,
+              vehicleId,
+              channel: fallbackChannel,
+              channelsRequested: targetChannels,
+              alertTimestamp: alertTimestamp!.toISOString(),
+              startTime: startTime.toISOString(),
+              endTime: endTime.toISOString(),
+              lookbackSeconds,
+              forwardSeconds,
+              queryResources,
+              querySent: queried,
+              requestSent: false,
+              requestDownload,
+              downloadRequestSent: false,
+              playbackSource: 'live_fallback',
+              playbackJobId: null,
+              playbackJobUrl: null,
+              streamStarted: true,
+              streamUrl: buildStreamUrl(vehicleId, fallbackChannel)
+            }
+          });
+        }
+
         return res.status(409).json({
           success: false,
           message: `Vehicle ${vehicleId} is not connected; cannot request camera playback`,
@@ -2913,7 +3078,7 @@ export function createRoutes(
             requestDownload,
             downloadRequestSent: false,
             playbackJobId: manualCaptureJob?.id || null,
-            playbackJobUrl: manualCaptureJob ? `/api/videos/jobs/${encodeURIComponent(manualCaptureJob.id)}` : null
+            playbackJobUrl: manualCaptureJob ? `/api/videos/jobs/${encodeURIComponent(manualCaptureJob.id)}/file` : null
           }
         });
       }
@@ -2962,8 +3127,9 @@ export function createRoutes(
           requestSent: requested,
           requestDownload,
           downloadRequestSent: downloadRequested,
+          playbackSource: requested || queued || manualCaptureJob ? 'manual_capture' : 'pending',
           playbackJobId: manualCaptureJob?.id || null,
-          playbackJobUrl: manualCaptureJob ? `/api/videos/jobs/${encodeURIComponent(manualCaptureJob.id)}` : null
+          playbackJobUrl: manualCaptureJob ? `/api/videos/jobs/${encodeURIComponent(manualCaptureJob.id)}/file` : null
         }
       });
     } catch (error: any) {
@@ -3070,7 +3236,7 @@ export function createRoutes(
     if (recordPlayback && streamRequestSent) {
       const job = buildManualVideoJob(id, ch, start, end);
       playbackJobId = job.id;
-      playbackJobUrl = `/api/videos/jobs/${encodeURIComponent(job.id)}`;
+      playbackJobUrl = `/api/videos/jobs/${encodeURIComponent(job.id)}/file`;
     }
 
     const anySent = streamRequestSent || downloadRequestSent || querySent;
@@ -3331,6 +3497,27 @@ export function createRoutes(
 
       const rows = (result.rows || []).filter((row: any) => String(row?.file_path || '').trim());
       if (rows.length === 0) {
+        const vehicle = tcpServer.getVehicle(id);
+        const requestedChannel = Number(ch) || 1;
+        if (vehicle && vehicle.connected) {
+          const liveStarted = startLiveStreamForVehicle(id, requestedChannel);
+          return res.status(200).json({
+            success: true,
+            message: `No stored local recordings found. Live stream started for ${id} channel ${requestedChannel}`,
+            data: {
+              vehicleId: id,
+              channel: requestedChannel,
+              startTime: start.toISOString(),
+              endTime: end.toISOString(),
+              streamUrl: buildStreamUrl(id, requestedChannel),
+              streamStarted: liveStarted,
+              playbackSource: 'live_fallback',
+              playbackJobId: null,
+              playbackJobUrl: null
+            }
+          });
+        }
+
         return res.status(404).json({
           success: false,
           message: 'No stored local recordings found in selected range'
@@ -3350,7 +3537,7 @@ export function createRoutes(
           startTime: start.toISOString(),
           endTime: end.toISOString(),
           playbackJobId: job.id,
-          playbackJobUrl: `/api/videos/jobs/${encodeURIComponent(job.id)}`,
+          playbackJobUrl: `/api/videos/jobs/${encodeURIComponent(job.id)}/file`,
           outputUrl: job.outputUrl,
           sourceSegments: rows.length
         }

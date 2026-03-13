@@ -727,10 +727,15 @@
           })
         });
         const body = await res.json().catch(() => ({}));
-        if (!res.ok || !body.success) {
-          throw new Error(body.message || `HTTP ${res.status}`);
-        }
         const d = body.data || {};
+        const hasLiveFallback = d?.playbackSource === 'live_fallback' && !!d.streamUrl;
+
+        if (body.success === false || !res.ok) {
+          if (!hasLiveFallback) {
+            throw new Error(body.message || `HTTP ${res.status}`);
+          }
+        }
+
         const prev = alertVideoState.get(String(alertId)) || {};
         alertVideoState.set(String(alertId), {
           ...prev,
@@ -743,7 +748,20 @@
         });
         const start = body?.data?.startTime ? new Date(body.data.startTime).toLocaleString() : 'n/a';
         const end = body?.data?.endTime ? new Date(body.data.endTime).toLocaleString() : 'n/a';
-        setStatus(`Video request sent. Window: ${start} -> ${end}`, 'ok');
+        if (hasLiveFallback) {
+          setStatus(`Live stream fallback started. Window: ${start} -> ${end}`, 'ok');
+          if (d.streamUrl) {
+            videoReadyPlayerEl.src = d.streamUrl;
+            videoReadyPlayerEl.load();
+            videoReadyPlayerEl.play().catch(() => {});
+            videoJobStatusEl.textContent = 'Video source: live stream';
+          } else {
+            videoJobStatusEl.textContent = 'Live stream requested, but stream URL is missing.';
+          }
+        } else {
+          setStatus(`Video request sent. Window: ${start} -> ${end}`, 'ok');
+        }
+
         if (d.playbackJobId) {
           videoJobStatusEl.textContent = `Job ${d.playbackJobId}: queued`;
           pollVideoJob(d.playbackJobId);
