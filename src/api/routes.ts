@@ -775,7 +775,7 @@ export function createRoutes(
     );
     await videoStorage.updateVideoEnd(videoId, end, stats.size, duration);
 
-    let persistedUrl = `/api/videos/jobs/${encodeURIComponent(job.id)}/file`;
+    let persistedUrl = buildStoredVideoUrl(String(videoId));
     if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
       const uploaded = await videoStorage.uploadVideoToSupabase(
         videoId,
