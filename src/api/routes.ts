@@ -208,6 +208,55 @@ export function createRoutes(
 
     return Array.from(new Set(signals));
   };
+  const classifyTraceSourceShape = (trace: any, parse: any): string => {
+    const messageIdHex = String(trace?.messageIdHex || '').toLowerCase();
+    const additionalInfo = Array.isArray(parse?.additionalInfo) ? parse.additionalInfo : [];
+    const itemDiagnostics = Array.isArray(parse?.itemDiagnostics) ? parse.itemDiagnostics : [];
+    const locationInfoIds = new Set<number>();
+
+    for (const item of additionalInfo) {
+      const id = Number(item?.idDec);
+      if (Number.isFinite(id)) locationInfoIds.add(id);
+    }
+    for (const batchItem of itemDiagnostics) {
+      const fields = Array.isArray(batchItem?.additionalInfo) ? batchItem.additionalInfo : [];
+      for (const item of fields) {
+        const id = Number(item?.idDec);
+        if (Number.isFinite(id)) locationInfoIds.add(id);
+      }
+    }
+
+    const hasVideoRelatedAlertInfo = [0x14, 0x15, 0x16, 0x17, 0x18].some((id) => locationInfoIds.has(id));
+
+    if (messageIdHex === '0x0200' || messageIdHex === '0x0704') {
+      return hasVideoRelatedAlertInfo
+        ? 'video-related-alerts'
+        : 'location-report-with-additional-info';
+    }
+    if (messageIdHex === '0x0900') return 'pass-through';
+    if (messageIdHex === '0x0800') return 'multimedia-event';
+    if (messageIdHex === '0x0801') return 'multimedia-data';
+    if (messageIdHex === '0x1205') return 'resource-list';
+    return 'other';
+  };
+  const extractSignalsFromResourceList = (resourceList: any): string[] => {
+    const items = Array.isArray(resourceList?.items) ? resourceList.items : [];
+    const signals: string[] = [];
+    for (const item of items) {
+      const bits = Array.isArray(item?.alarmBits) ? item.alarmBits.map((v: any) => Number(v)).filter(Number.isFinite) : [];
+      for (const bit of bits) {
+        if (bit === 32) signals.push('jtt1078_video_signal_loss');
+        else if (bit === 33) signals.push('jtt1078_video_signal_blocking');
+        else if (bit === 34) signals.push('jtt1078_storage_failure');
+        else if (bit === 35) signals.push('jtt1078_other_video_failure');
+        else if (bit === 36) signals.push('jtt1078_bus_overcrowding');
+        else if (bit === 37) signals.push('jtt1078_abnormal_driving');
+        else if (bit === 38) signals.push('jtt1078_special_alarm_threshold');
+        else if (bit > 38 && bit < 64) signals.push(`jtt1078_video_alarm_bit_${bit - 32}`);
+      }
+    }
+    return Array.from(new Set(signals));
+  };
   const backfillAlertMediaLinks = async (alertId: string, row: any) => {
     const deviceId = String(row?.device_id || '').trim();
     const channel = Number(row?.channel || 1);
@@ -2626,6 +2675,8 @@ export function createRoutes(
         const nativeSignals = extractNativeSignalsFromParsedAlert(parsedAlert);
         const parsedVendorAlerts = Array.isArray(parse.parsedAlerts) ? parse.parsedAlerts : [];
         const itemDiagnostics = Array.isArray(parse.itemDiagnostics) ? parse.itemDiagnostics : [];
+        const resourceList = parse.resourceList || null;
+        const resourceListSignals = extractSignalsFromResourceList(resourceList);
         const batchNativeSignals = itemDiagnostics.flatMap((item: any) => extractNativeSignalsFromParsedAlert(item?.parsedAlert || null));
         const nearbyAlerts = (linkedAlertsByVehicle.get(String(trace.vehicleId || '').trim()) || [])
           .filter((alert: any) => {
@@ -2649,6 +2700,7 @@ export function createRoutes(
           new Set([
             ...nativeSignals,
             ...batchNativeSignals,
+            ...resourceListSignals,
             ...parsedVendorAlerts.map((item: any) => String(item.signalCode || '').trim()).filter(Boolean)
           ])
         );
@@ -2661,15 +2713,11 @@ export function createRoutes(
           messageIdHex: trace.messageIdHex,
           parser: parse.parser || null,
           parseSuccess: typeof parse.parseSuccess === 'boolean' ? parse.parseSuccess : null,
-          sourceShape: trace.messageIdHex === '0x0200' || trace.messageIdHex === '0x0704'
-            ? 'location-report-with-additional-info'
-            : trace.messageIdHex === '0x0900'
-              ? 'pass-through'
-              : trace.messageIdHex === '0x0800'
-                ? 'multimedia-event'
-                : 'other',
+          sourceShape: classifyTraceSourceShape(trace, parse),
           additionalInfo: parse.additionalInfo || [],
           parsedAlert: parsedAlert,
+          resourceList,
+          resourceListSignals,
           batchItems: itemDiagnostics.map((item: any) => ({
             index: item.index,
             parseSuccess: !!item.parseSuccess,

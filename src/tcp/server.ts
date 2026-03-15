@@ -426,7 +426,12 @@ export class JTT808Server {
             message.packetIndex
           );
         } else {
-          this.parseResourceList(message.terminalPhone, message.body);
+          const parsedResourceList = this.parseResourceList(message.terminalPhone, message.body);
+          this.pushMessageTrace(message, buffer, {
+            parser: 'resource-list-0x1205',
+            parseSuccess: !!parsedResourceList,
+            resourceList: parsedResourceList
+          });
         }
         break;
       case 0x1206: // File upload completion notification
@@ -1744,10 +1749,15 @@ export class JTT808Server {
     this.parseResourceList(vehicleId, merged);
   }
 
-  private parseResourceList(vehicleId: string, body: Buffer): void {
+  private parseResourceList(vehicleId: string, body: Buffer): {
+    querySerial?: number;
+    expectedTotal?: number;
+    parsedItems: number;
+    items: ResourceVideoItem[];
+  } | null {
     if (body.length < 2) {
       console.log(`Resource list body too short: ${body.length} bytes`);
-      return;
+      return null;
     }
 
     let listOffset = 0;
@@ -1821,6 +1831,12 @@ export class JTT808Server {
       receivedAt: Date.now(),
       items
     });
+    return {
+      querySerial,
+      expectedTotal,
+      parsedItems: items.length,
+      items
+    };
   }
 
   private parseBcdTime(buffer: Buffer): string {
