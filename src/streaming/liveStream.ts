@@ -2,6 +2,13 @@ import WebSocket from 'ws';
 import { IncomingMessage } from 'http';
 import { JTT808Server } from '../tcp/server';
 
+function envFlag(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (typeof raw !== 'string' || !raw.trim()) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(normalized);
+}
+
 type StreamMode = 'live' | 'replay';
 
 interface StreamSubscription {
@@ -22,7 +29,8 @@ export class LiveVideoStreamServer {
   constructor(tcpServer: JTT808Server, path = '/ws/video') {
     this.tcpServer = tcpServer;
     this.path = path;
-    this.keepStreamsWithoutClients = String(process.env.KEEP_STREAMS_WITHOUT_CLIENTS ?? 'false').toLowerCase() === 'true';
+    const backgroundStreamsEnabled = envFlag('BACKGROUND_STREAMS_ENABLED', true);
+    this.keepStreamsWithoutClients = envFlag('KEEP_STREAMS_WITHOUT_CLIENTS', backgroundStreamsEnabled);
     this.wss = new WebSocket.Server({
       noServer: true
     });

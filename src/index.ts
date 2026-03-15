@@ -110,6 +110,13 @@ import * as dotenv from 'dotenv';
 
 dotenv.config();
 
+function envFlag(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (typeof raw !== 'string' || !raw.trim()) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(normalized);
+}
+
 // Raw-only logging mode:
 // - keeps raw ingest persisted via RawIngestLogger
 // - suppresses noisy runtime console logs
@@ -126,9 +133,12 @@ const API_PORT = parseInt(process.env.API_PORT || '3000');
 const SERVER_IP = process.env.SERVER_IP || 'localhost';
 const AUTO_SCREENSHOT_INTERVAL_MS = parseInt(process.env.AUTO_SCREENSHOT_INTERVAL_MS || '30000');
 const AUTO_SCREENSHOT_FALLBACK_DELAY_MS = parseInt(process.env.AUTO_SCREENSHOT_FALLBACK_DELAY_MS || '600');
-const KEEP_STREAMS_WITHOUT_CLIENTS = String(process.env.KEEP_STREAMS_WITHOUT_CLIENTS ?? 'false').toLowerCase() === 'true';
-const BACKGROUND_STREAMS_ENABLED = String(process.env.BACKGROUND_STREAMS_ENABLED ?? 'false').toLowerCase() === 'true';
-const AUTO_SCREENSHOT_FANOUT_ENABLED = String(process.env.AUTO_SCREENSHOT_FANOUT_ENABLED ?? 'false').toLowerCase() === 'true';
+const BACKGROUND_STREAMS_ENABLED = envFlag('BACKGROUND_STREAMS_ENABLED', true);
+const KEEP_STREAMS_WITHOUT_CLIENTS = envFlag(
+  'KEEP_STREAMS_WITHOUT_CLIENTS',
+  BACKGROUND_STREAMS_ENABLED
+);
+const AUTO_SCREENSHOT_FANOUT_ENABLED = envFlag('AUTO_SCREENSHOT_FANOUT_ENABLED', false);
 const BACKGROUND_STREAM_INTERVAL_MS = parseInt(process.env.BACKGROUND_STREAM_INTERVAL_MS || '45000');
 
 async function startServer() {
@@ -199,6 +209,10 @@ async function startServer() {
   await tcpServer.start();
   await udpServer.start();
   retentionService.start();
+
+  console.log(
+    `Background capture mode: streams=${BACKGROUND_STREAMS_ENABLED ? 'on' : 'off'}, keepWithoutClients=${KEEP_STREAMS_WITHOUT_CLIENTS ? 'on' : 'off'}, screenshotFanout=${AUTO_SCREENSHOT_FANOUT_ENABLED ? 'on' : 'off'}`
+  );
   
   app.use('/api', createRoutes(tcpServer, udpServer, replayService));
   app.use('/api/alerts', createAlertRoutes());
