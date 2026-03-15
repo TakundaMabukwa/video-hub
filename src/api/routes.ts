@@ -3537,6 +3537,114 @@ export function createRoutes(
   });
 
   // Query locally stored videos in a time range (DB-backed recordings)
+  router.get('/playback/vehicles', async (req, res) => {
+    const limit = Math.max(1, Math.min(1000, Number(req.query.limit || 500)));
+    const days = Math.max(1, Math.min(365, Number(req.query.days || 7)));
+
+    try {
+      const db = require('../storage/database');
+      const result = await db.query(
+        `SELECT
+           device_id,
+           COUNT(*)::int AS clip_count,
+           MIN(start_time) AS earliest_time,
+           MAX(COALESCE(end_time, start_time)) AS latest_time,
+           ARRAY_AGG(DISTINCT channel ORDER BY channel) AS channels
+         FROM videos
+         WHERE start_time >= NOW() - ($1::int * INTERVAL '1 day')
+         GROUP BY device_id
+         ORDER BY latest_time DESC
+         LIMIT $2`,
+        [days, limit]
+      );
+
+      return res.json({
+        success: true,
+        data: (result.rows || []).map((row: any) => ({
+          vehicleId: String(row.device_id || ''),
+          clipCount: Number(row.clip_count || 0),
+          earliestTime: row.earliest_time,
+          latestTime: row.latest_time,
+          channels: Array.isArray(row.channels) ? row.channels.map((value: any) => Number(value)).filter((v: number) => Number.isFinite(v) && v > 0) : []
+        }))
+      });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to list playback vehicles',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
+  router.get('/vehicles/:id/videos/availability', async (req, res) => {
+    const { id } = req.params;
+    const dateRaw = String(req.query.date || '').trim();
+    const requestedDate = dateRaw ? new Date(`${dateRaw}T00:00:00.000Z`) : new Date();
+    if (Number.isNaN(requestedDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid date. Use YYYY-MM-DD'
+      });
+    }
+
+    const startOfDay = new Date(requestedDate);
+    const endOfDay = new Date(requestedDate);
+    endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+
+    try {
+      const db = require('../storage/database');
+      const result = await db.query(
+        `SELECT id, device_id, channel, video_type, start_time, end_time, duration_seconds, file_size
+         FROM videos
+         WHERE device_id = $1
+           AND start_time < $3
+           AND COALESCE(end_time, start_time) >= $2
+         ORDER BY channel ASC, start_time ASC`,
+        [id, startOfDay, endOfDay]
+      );
+
+      const rows = result.rows || [];
+      const byChannel = new Map<number, any[]>();
+      for (const row of rows) {
+        const channel = Number(row.channel || 1) || 1;
+        if (!byChannel.has(channel)) byChannel.set(channel, []);
+        byChannel.get(channel)!.push({
+          id: row.id,
+          startTime: row.start_time,
+          endTime: row.end_time,
+          durationSeconds: Number(row.duration_seconds || 0),
+          fileSize: Number(row.file_size || 0),
+          videoType: row.video_type
+        });
+      }
+
+      const channels = Array.from(byChannel.entries()).map(([channel, clips]) => ({
+        channel,
+        clipCount: clips.length,
+        earliestTime: clips[0]?.startTime || null,
+        latestTime: clips[clips.length - 1]?.endTime || clips[clips.length - 1]?.startTime || null,
+        clips
+      }));
+
+      return res.json({
+        success: true,
+        data: {
+          vehicleId: id,
+          date: startOfDay.toISOString().slice(0, 10),
+          channels,
+          totalClips: rows.length
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch playback availability',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
   router.post('/vehicles/:id/videos/local', async (req, res) => {
     const { id } = req.params;
     const { channel = 0, startTime, endTime, limit = 200 } = req.body || {};
