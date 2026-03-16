@@ -53,6 +53,7 @@ export interface ExternalAlertInput {
   priority?: AlertPriority;
   location?: { latitude: number; longitude: number };
   metadata?: Record<string, any>;
+  signatureScope?: string;
 }
 
 export class AlertManager extends EventEmitter {
@@ -291,7 +292,12 @@ export class AlertManager extends EventEmitter {
     for (const signalCode of newlyRaisedSignals) {
       const alertSignalDetail = this.getSignalDetail(signalCode);
       const primaryType = this.getPrimaryAlertTypeForSignal(alert, signalCode, alertSignalDetail.label);
-      const signature = this.buildAlertSignature(alert.vehicleId, channel, signalCode);
+      const signature = this.buildAlertSignature(
+        alert.vehicleId,
+        channel,
+        signalCode,
+        String((alert as any)?.sourceMessageId || '0x0200')
+      );
 
       if (this.shouldSuppressDuplicate(signature, alert.timestamp)) {
         continue;
@@ -352,7 +358,12 @@ export class AlertManager extends EventEmitter {
     const filtered = this.filterActionableSignals([baseSignalCode]);
     if (filtered.length === 0) return;
     const signalCode = filtered[0];
-    const signature = this.buildAlertSignature(input.vehicleId, channel, signalCode);
+    const signature = this.buildAlertSignature(
+      input.vehicleId,
+      channel,
+      signalCode,
+      input.signatureScope || input.metadata?.alertSignatureScope || input.metadata?.sourceMessageId || 'external'
+    );
 
     if (this.shouldSuppressDuplicate(signature, timestamp)) {
       return;
@@ -399,8 +410,14 @@ export class AlertManager extends EventEmitter {
     console.log(`External alert ${alertId}: ${alertEvent.type} [${priority}]`);
   }
 
-  private buildAlertSignature(vehicleId: string, channel: number, primaryType: string): string {
-    return `${vehicleId}|${channel}|${primaryType.toLowerCase().trim()}`;
+  private buildAlertSignature(
+    vehicleId: string,
+    channel: number,
+    primaryType: string,
+    scope?: string
+  ): string {
+    const normalizedScope = String(scope || 'default').toLowerCase().trim();
+    return `${vehicleId}|${channel}|${normalizedScope}|${primaryType.toLowerCase().trim()}`;
   }
 
   private shouldSuppressDuplicate(signature: string, now: Date): boolean {

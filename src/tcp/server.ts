@@ -421,7 +421,7 @@ export class JTT808Server {
         console.log(`📋 Capabilities response from ${message.terminalPhone}`);
         this.parseCapabilities(message.body, message.terminalPhone);
         break;
-            case 0x1205: // Resource list response
+      case 0x1205: // Resource list response
         console.log(`📝 Resource list response (0x1205) from ${message.terminalPhone}`);
 
         if (message.isSubpackage && message.packetCount && message.packetIndex) {
@@ -433,6 +433,9 @@ export class JTT808Server {
           );
         } else {
           const parsedResourceList = this.parseResourceList(message.terminalPhone, message.body);
+          if (parsedResourceList) {
+            this.emitResourceListAlerts(message.terminalPhone, parsedResourceList);
+          }
           this.pushMessageTrace(message, buffer, {
             parser: 'resource-list-0x1205',
             parseSuccess: !!parsedResourceList,
@@ -1872,7 +1875,10 @@ export class JTT808Server {
     this.pendingResourceLists.delete(key);
     const merged = Buffer.concat(orderedParts);
     console.log(`Resource list merged ${packetCount} packets for ${vehicleId} (len=${merged.length})`);
-    this.parseResourceList(vehicleId, merged);
+    const parsedResourceList = this.parseResourceList(vehicleId, merged);
+    if (parsedResourceList) {
+      this.emitResourceListAlerts(vehicleId, parsedResourceList);
+    }
   }
 
   private parseResourceList(vehicleId: string, body: Buffer): {
@@ -1963,6 +1969,85 @@ export class JTT808Server {
       parsedItems: items.length,
       items
     };
+  }
+
+  private emitResourceListAlerts(
+    vehicleId: string,
+    resourceList: { items: ResourceVideoItem[] }
+  ): void {
+    const last = this.lastKnownLocation.get(vehicleId);
+    const baseLocation = last
+      ? { latitude: last.latitude, longitude: last.longitude }
+      : undefined;
+
+    for (const item of resourceList.items) {
+      for (const bit of item.alarmBits) {
+        const signalCode = this.mapResourceAlarmBitToSignal(bit);
+        if (!signalCode) continue;
+
+        const timestamp = this.parseResourceTimestamp(item.endTime) || last?.timestamp || new Date();
+        void this.alertManager.processExternalAlert({
+          vehicleId,
+          channel: item.channel || 1,
+          type: this.describeResourceAlarmBit(bit),
+          signalCode,
+          priority: this.getPriorityForResourceAlarmBit(bit),
+          timestamp,
+          location: baseLocation,
+          signatureScope: `0x1205|ch:${item.channel}|start:${item.startTime}|end:${item.endTime}|bit:${bit}`,
+          metadata: {
+            ...this.buildAlertContextMetadata(vehicleId, '0x1205', baseLocation),
+            sourceType: 'resource_list',
+            resourceChannel: item.channel,
+            resourceStartTime: item.startTime,
+            resourceEndTime: item.endTime,
+            resourceAlarmBit: bit,
+            resourceAlarmLabel: this.describeResourceAlarmBit(bit),
+            resourceAlarmFlag64Hex: item.alarmFlag64Hex,
+            resourceMediaType: item.mediaType,
+            resourceStreamType: item.streamType,
+            resourceStorageType: item.storageType,
+            resourceFileSize: item.fileSize
+          }
+        });
+      }
+    }
+  }
+
+  private mapResourceAlarmBitToSignal(bit: number): string | null {
+    if (bit === 0) return 'jt808_emergency';
+    if (bit === 1) return 'jt808_overspeed';
+    if (bit === 2) return 'jt808_fatigue';
+    if (bit === 3) return 'jt808_dangerous_driving';
+    if (bit === 13) return 'jt808_overspeed_warning';
+    if (bit === 14) return 'jt808_fatigue_warning';
+    if (bit === 29) return 'jt808_collision_warning';
+    if (bit === 30) return 'jt808_rollover_warning';
+    if (bit === 32) return 'jtt1078_video_signal_loss';
+    if (bit === 33) return 'jtt1078_video_signal_blocking';
+    if (bit === 34) return 'jtt1078_storage_failure';
+    if (bit === 35) return 'jtt1078_other_video_failure';
+    if (bit === 36) return 'jtt1078_bus_overcrowding';
+    if (bit === 37) return 'jtt1078_abnormal_driving';
+    if (bit === 38) return 'jtt1078_special_alarm_threshold';
+    if (bit > 38 && bit < 64) return `jtt1078_video_alarm_bit_${bit - 32}`;
+    return null;
+  }
+
+  private getPriorityForResourceAlarmBit(bit: number): AlertPriority {
+    if (bit === 0 || bit === 29 || bit === 30) return AlertPriority.CRITICAL;
+    if (bit === 2 || bit === 3 || bit === 34 || bit === 37) return AlertPriority.HIGH;
+    if (bit === 1 || bit === 13 || bit === 14 || (bit >= 32 && bit <= 38)) return AlertPriority.MEDIUM;
+    return AlertPriority.LOW;
+  }
+
+  private parseResourceTimestamp(value: string): Date | null {
+    if (!value || typeof value !== 'string') return null;
+    const isoLike = value.replace(' ', 'T');
+    const local = new Date(isoLike);
+    if (!Number.isNaN(local.getTime())) return local;
+    const utc = new Date(`${isoLike}Z`);
+    return Number.isNaN(utc.getTime()) ? null : utc;
   }
 
   private parseBcdTime(buffer: Buffer): string {
