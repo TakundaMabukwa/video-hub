@@ -1108,7 +1108,8 @@ export class JTT808Server {
     const channelMatch = text.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
     const channel = channelMatch ? Number(channelMatch[1]) : undefined;
     const strictMode = this.isStrictAlertMode();
-    if (!allowHeuristicBinaryDecode) {
+    const canAttemptDecode = allowHeuristicBinaryDecode || !strictMode;
+    if (!canAttemptDecode) {
       this.bumpVendorTelemetry('suppressedByReason', `pass_through_type_not_whitelisted_${passThroughType}`);
       return [];
     }
@@ -1136,7 +1137,7 @@ export class JTT808Server {
     // No free-text fallback for vendor alarms.
 
     // Binary decode is only attempted for pass-through types aligned to alarm payloads.
-    if (!allowHeuristicBinaryDecode) {
+    if (!canAttemptDecode) {
       if (strictMode && results.length === 0) {
         this.bumpVendorTelemetry('suppressedByReason', 'strict_no_deterministic_code');
       }
