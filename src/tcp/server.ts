@@ -1378,7 +1378,16 @@ export class JTT808Server {
       for (const mapped of mappedList) add(mapped);
     }
 
-    // No raw scan fallback: vendor alarms must come from deterministic framed/protocol paths.
+    // Restore the broader historical behavior: also scan the raw payload itself.
+    // This lets vendor codes surface even when the device does not wrap them in an
+    // Appendix-A peripheral frame but still sends deterministic numeric/text payloads.
+    const rawMappedList = this.mapVendorAlarmsFromBytes(payload, true, {
+      strictMode,
+      extractionMethod: 'ascii_code',
+      requireDeterministic: false
+    });
+    for (const mapped of rawMappedList) add(mapped);
+
     if (results.length === 0) {
       this.bumpVendorTelemetry('suppressedByReason', 'no_deterministic_vendor_pattern_detected');
     }
