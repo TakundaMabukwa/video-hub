@@ -24,7 +24,9 @@ ALTER TABLE IF EXISTS alerts
   ADD COLUMN IF NOT EXISTS report_document_type TEXT,
   ADD COLUMN IF NOT EXISTS is_false_alert BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN IF NOT EXISTS false_alert_reason TEXT,
-  ADD COLUMN IF NOT EXISTS false_alert_reason_code TEXT;
+  ADD COLUMN IF NOT EXISTS false_alert_reason_code TEXT,
+  ADD COLUMN IF NOT EXISTS repeated_count INTEGER DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS last_occurrence TIMESTAMP DEFAULT NOW();
 
 -- ============================================
 -- IMAGES

@@ -109,31 +109,67 @@ export class AlertStorageDB {
   }
 
   async saveAlert(alert: AlertEvent) {
-    await query(
-      `INSERT INTO alerts (id, device_id, channel, alert_type, priority, status, resolved, escalation_level, timestamp, latitude, longitude, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-       ON CONFLICT (id) DO UPDATE SET
-         status = EXCLUDED.status,
-         resolved = EXCLUDED.resolved,
-         escalation_level = EXCLUDED.escalation_level,
-         acknowledged_at = EXCLUDED.acknowledged_at,
-         resolved_at = EXCLUDED.resolved_at,
-         metadata = EXCLUDED.metadata`,
-      [
-        alert.id,
-        alert.vehicleId,
-        alert.channel,
-        alert.type,
-        alert.priority,
-        alert.status,
-        alert.status === 'resolved',
-        alert.escalationLevel,
-        alert.timestamp,
-        alert.location.latitude,
-        alert.location.longitude,
-        JSON.stringify(alert.metadata)
-      ]
+    // DEDUPLICATION: Check if similar alert exists within last 60 seconds
+    // If yes, just increment counter (UPDATE = 50x faster than INSERT)
+    // If no, insert as new alert
+    
+    const recentAlert = await query(
+      `SELECT id FROM alerts 
+       WHERE device_id = $1 
+         AND channel = $2 
+         AND alert_type = $3
+         AND timestamp > NOW() - INTERVAL '60 seconds'
+       ORDER BY timestamp DESC 
+       LIMIT 1`,
+      [alert.vehicleId, alert.channel, alert.type]
     );
+
+    if (recentAlert.rows.length > 0) {
+      // DUPLICATE ALERT: Just update the count (fast UPDATE instead of INSERT)
+      await query(
+        `UPDATE alerts 
+         SET repeated_count = COALESCE(repeated_count, 0) + 1,
+             last_occurrence = NOW(),
+             metadata = $1,
+             timestamp = GREATEST(timestamp, $2)
+         WHERE id = $3`,
+        [
+          JSON.stringify(alert.metadata),
+          alert.timestamp,
+          recentAlert.rows[0].id
+        ]
+      );
+    } else {
+      // NEW ALERT: Insert as normal
+      await query(
+        `INSERT INTO alerts (id, device_id, channel, alert_type, priority, status, resolved, escalation_level, timestamp, latitude, longitude, metadata, repeated_count, last_occurrence)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         ON CONFLICT (id) DO UPDATE SET
+           status = EXCLUDED.status,
+           resolved = EXCLUDED.resolved,
+           escalation_level = EXCLUDED.escalation_level,
+           acknowledged_at = EXCLUDED.acknowledged_at,
+           resolved_at = EXCLUDED.resolved_at,
+           metadata = EXCLUDED.metadata,
+           repeated_count = EXCLUDED.repeated_count`,
+        [
+          alert.id,
+          alert.vehicleId,
+          alert.channel,
+          alert.type,
+          alert.priority,
+          alert.status,
+          alert.status === 'resolved',
+          alert.escalationLevel,
+          alert.timestamp,
+          alert.location.latitude,
+          alert.location.longitude,
+          JSON.stringify(alert.metadata),
+          1,  // initial count
+          alert.timestamp  // last_occurrence
+        ]
+      );
+    }
   }
 
   async updateAlertStatus(alertId: string, status: string, acknowledgedAt?: Date, resolvedAt?: Date, notes?: string, resolvedBy?: string) {

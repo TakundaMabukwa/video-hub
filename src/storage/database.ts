@@ -6,7 +6,7 @@ dotenv.config();
 
 // ========== CONNECTION POOL CONFIGURATION ==========
 // OPTIMIZED FOR: PostgreSQL max_connections = 300 + shared_buffers = 4GB + 16GB RAM
-// Increased pool size to handle 370+ cameras with spikes
+// NOTE: Queries are taking 40+ seconds - increased timeouts accordingly
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
   port: parseInt(process.env.DB_PORT || '5432'),
@@ -15,9 +15,9 @@ const pool = new Pool({
   password: String(process.env.DB_PASSWORD || ''),
   
   // CONNECTION POOL TUNING - BALANCED FOR HIGH LOAD
-  max: parseInt(process.env.DB_POOL_MAX || '150'),              // 150 = safe under 300 limit (leaves 150 for buffer)
-  idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT || '4000'),  // Kill idle connections after 4 seconds
-  connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT || '10000'), // 10s timeout for acquiring connection
+  max: parseInt(process.env.DB_POOL_MAX || '150'),              // 150 = safe under 300 limit
+  idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT || '6000'),  // Kill idle connections after 6 seconds
+  connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT || '60000'), // 60s timeout to allow waiting for slow queries (was 10s)
 });
 
 // ========== CONNECTION POOL EVENT HANDLERS ==========
@@ -26,8 +26,8 @@ pool.on('error', (err: Error) => {
 });
 
 pool.on('connect', (client: PoolClient) => {
-  // Set statement timeout on each connection to kill long-running queries (30 seconds)
-  client.query(`SET statement_timeout = '${process.env.DB_STATEMENT_TIMEOUT || '30000'}'`).catch(err => {
+  // Set statement timeout on each connection - queries take 40+ seconds, so allow 60s
+  client.query(`SET statement_timeout = '${process.env.DB_STATEMENT_TIMEOUT || '60000'}'`).catch(err => {
     console.warn('⚠️ Failed to set statement timeout:', err.message);
   });
 });
@@ -109,6 +109,8 @@ export const ensureRuntimeSchema = async (): Promise<void> => {
     `ALTER TABLE IF EXISTS alerts ADD COLUMN IF NOT EXISTS is_false_alert BOOLEAN NOT NULL DEFAULT FALSE`,
     `ALTER TABLE IF EXISTS alerts ADD COLUMN IF NOT EXISTS false_alert_reason TEXT`,
     `ALTER TABLE IF EXISTS alerts ADD COLUMN IF NOT EXISTS false_alert_reason_code TEXT`,
+    `ALTER TABLE IF EXISTS alerts ADD COLUMN IF NOT EXISTS repeated_count INTEGER DEFAULT 1`,
+    `ALTER TABLE IF EXISTS alerts ADD COLUMN IF NOT EXISTS last_occurrence TIMESTAMP DEFAULT NOW()`,
 
     // images table compatibility for alert-linked screenshots
     `ALTER TABLE IF EXISTS images ADD COLUMN IF NOT EXISTS storage_url TEXT`,
@@ -126,7 +128,10 @@ export const ensureRuntimeSchema = async (): Promise<void> => {
     `CREATE INDEX IF NOT EXISTS idx_videos_alert_id ON videos(alert_id)`,
     `CREATE INDEX IF NOT EXISTS idx_videos_device_start_time ON videos(device_id, start_time DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_videos_device_channel_start_time ON videos(device_id, channel, start_time DESC)`,
-    `CREATE INDEX IF NOT EXISTS idx_videos_device_channel_end_time ON videos(device_id, channel, end_time DESC)`
+    `CREATE INDEX IF NOT EXISTS idx_videos_device_channel_end_time ON videos(device_id, channel, end_time DESC)`,
+    
+    // indexes for alert deduplication
+    `CREATE INDEX IF NOT EXISTS idx_alerts_dedup ON alerts(device_id, channel, alert_type, timestamp DESC)`
   ];
 
   for (const sql of statements) {
