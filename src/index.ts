@@ -254,6 +254,9 @@ async function startServer() {
   app.use('/api/alerts', createAlertRoutes());
   
   app.get('/health', (req, res) => {
+    const { getPoolStats } = require('./storage/database');
+    const dbStats = getPoolStats();
+    
     res.json({
       status: 'healthy',
       timestamp: new Date().toISOString(),
@@ -261,7 +264,35 @@ async function startServer() {
         tcp: `listening on port ${TCP_PORT}`,
         udp: `listening on port ${UDP_PORT}`,
         api: `listening on port ${API_PORT}`
+      },
+      database: {
+        pool: dbStats,
+        warning: dbStats.waiting > 0 ? `${dbStats.waiting} queries waiting for a connection` : null,
+        alert: dbStats.active > dbStats.max * 0.9 ? `Pool is ${Math.round((dbStats.active/dbStats.max)*100)}% utilized` : null
       }
+    });
+  });
+  
+  // Database pool status endpoint (for monitoring)
+  app.get('/api/db/pool-status', (req, res) => {
+    const { getPoolStats } = require('./storage/database');
+    const stats = getPoolStats();
+    
+    res.json({
+      timestamp: new Date().toISOString(),
+      pool: stats,
+      utilization: {
+        percentage: Math.round((stats.active / stats.max) * 100),
+        active: stats.active,
+        idle: stats.idle,
+        waiting: stats.waiting,
+        max: stats.max
+      },
+      warnings: [
+        ...(stats.waiting > 0 ? [`${stats.waiting} queries waiting for connection`] : []),
+        ...(stats.active > stats.max * 0.8 ? [`Connection pool is ${Math.round((stats.active/stats.max)*100)}% utilized`] : []),
+        ...(stats.idle === 0 && stats.active > 0 ? [`No idle connections available`] : [])
+      ]
     });
   });
   
@@ -451,8 +482,23 @@ async function startServer() {
   console.log('==========================================\n');
   
   // Graceful shutdown
-  process.on('SIGINT', () => {
+  process.on('SIGINT', async () => {
     console.log('\nShutting down server...');
+    
+    // Close database pool
+    const { closePool } = await import('./storage/database');
+    await closePool();
+    
+    process.exit(0);
+  });
+  
+  process.on('SIGTERM', async () => {
+    console.log('\nTerminating server...');
+    
+    // Close database pool
+    const { closePool } = await import('./storage/database');
+    await closePool();
+    
     process.exit(0);
   });
 }
