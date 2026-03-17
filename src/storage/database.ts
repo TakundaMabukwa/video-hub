@@ -18,10 +18,6 @@ const pool = new Pool({
   max: parseInt(process.env.DB_POOL_MAX || '150'),              // 150 = safe under 300 limit (leaves 150 for buffer)
   idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT || '4000'),  // Kill idle connections after 4 seconds
   connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT || '10000'), // 10s timeout for acquiring connection
-  
-  // CONNECTION REUSE/CYCLING
-  connectionIdleTimeout: parseInt(process.env.DB_CONNECTION_IDLE_TIMEOUT || '1800000'), // 30 min: recycle old connections
-  maxUses: parseInt(process.env.DB_MAX_USES || '2000'),         // Recycle connection after 2000 queries
 });
 
 // ========== CONNECTION POOL EVENT HANDLERS ==========
