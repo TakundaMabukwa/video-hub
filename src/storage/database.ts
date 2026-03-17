@@ -1,11 +1,12 @@
-import { Pool, QueryResult } from 'pg';
+import { Pool, QueryResult, PoolClient } from 'pg';
 import * as dotenv from 'dotenv';
 
 // Load environment variables
 dotenv.config();
 
 // ========== CONNECTION POOL CONFIGURATION ==========
-// Optimized for high-concurrency scenarios (370+ cameras)
+// OPTIMIZED FOR: PostgreSQL max_connections = 300 + shared_buffers = 4GB + 16GB RAM
+// Increased pool size to handle 370+ cameras with spikes
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
   port: parseInt(process.env.DB_PORT || '5432'),
@@ -13,46 +14,41 @@ const pool = new Pool({
   user: process.env.DB_USER || 'postgres',
   password: String(process.env.DB_PASSWORD || ''),
   
-  // CONNECTION POOL TUNING
-  max: parseInt(process.env.DB_POOL_MAX || '100'),              // was 20, now 100 (for 370+ cameras)
-  min: parseInt(process.env.DB_POOL_MIN || '10'),               // new: maintain minimum connections
-  idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT || '5000'),  // was 30s, now 5s (aggressive reclaim)
-  connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT || '5000'), // was 2s, now 5s
+  // CONNECTION POOL TUNING - BALANCED FOR HIGH LOAD
+  max: parseInt(process.env.DB_POOL_MAX || '150'),              // 150 = safe under 300 limit (leaves 150 for buffer)
+  idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT || '4000'),  // Kill idle connections after 4 seconds
+  connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT || '10000'), // 10s timeout for acquiring connection
   
-  // CONNECTION VALIDATION
-  idleConnectionTestInterval: parseInt(process.env.DB_IDLE_TEST_INTERVAL || '10000'), // new: validate idle connections every 10s
-  maxUses: parseInt(process.env.DB_MAX_USES || '7500'),         // new: cycle connections after 7500 uses
-  
-  // QUERY TIMEOUT (kill queries after 30 seconds)
-  statement_timeout: parseInt(process.env.DB_STATEMENT_TIMEOUT || '30000'),
-  
-  // CONNECTION VALIDATION QUERIES
-  connectionTimeoutMillis: 5000,
-  query_timeout: 30000,
+  // CONNECTION REUSE/CYCLING
+  connectionIdleTimeout: parseInt(process.env.DB_CONNECTION_IDLE_TIMEOUT || '1800000'), // 30 min: recycle old connections
+  maxUses: parseInt(process.env.DB_MAX_USES || '2000'),         // Recycle connection after 2000 queries
 });
 
 // ========== CONNECTION POOL EVENT HANDLERS ==========
-pool.on('error', (err) => {
+pool.on('error', (err: Error) => {
   console.error('❌ Database Pool Error:', err.message);
 });
 
-pool.on('connect', () => {
-  // Reset statement timeout on each connection
-  pool.query(`SET statement_timeout = '${process.env.DB_STATEMENT_TIMEOUT || '30000'}'`).catch(err => {
+pool.on('connect', (client: PoolClient) => {
+  // Set statement timeout on each connection to kill long-running queries (30 seconds)
+  client.query(`SET statement_timeout = '${process.env.DB_STATEMENT_TIMEOUT || '30000'}'`).catch(err => {
     console.warn('⚠️ Failed to set statement timeout:', err.message);
   });
 });
 
-// Monitor pool exhaustion
-pool.on('ready', () => {
-  console.log('✅ Database pool ready');
-});
-
-// ========== WRAPPED QUERY WITH TIMEOUT & ERROR HANDLING ==========
-export const query = async (text: string, params?: any[]): Promise<QueryResult<any>> => {
+// ========== WRAPPED QUERY WITH WAITING & RETRY LOGIC ==========
+// Automatically waits and retries if no connections available
+export const query = async (
+  text: string,
+  params?: any[],
+  retryCount = 0,
+  maxRetries = 3
+): Promise<QueryResult<any>> => {
   const startTime = Date.now();
+  const waitStartTime = startTime;
   
   try {
+    // Attempt to acquire connection and execute query
     const result = await pool.query(text, params);
     const duration = Date.now() - startTime;
     
@@ -64,7 +60,28 @@ export const query = async (text: string, params?: any[]): Promise<QueryResult<a
     return result;
   } catch (error: any) {
     const duration = Date.now() - startTime;
-    console.error(`❌ Query failed (${duration}ms):`, error.message);
+    const errorMsg = error.message || String(error);
+    
+    // Handle "too many clients already" with exponential backoff retry
+    if (
+      (errorMsg.includes('too many clients already') || 
+       errorMsg.includes('FATAL') ||
+       errorMsg.includes('connect ECONNREFUSED')) &&
+      retryCount < maxRetries
+    ) {
+      const backoffMs = Math.min(1000 * Math.pow(2, retryCount), 5000); // Up to 5 second backoff
+      console.warn(
+        `⚠️ Connection pool busy (attempt ${retryCount + 1}/${maxRetries}), ` +
+        `waiting ${backoffMs}ms before retry...`
+      );
+      
+      // Wait and retry
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
+      return query(text, params, retryCount + 1, maxRetries);
+    }
+    
+    // Log errors
+    console.error(`❌ Query failed (${duration}ms):`, errorMsg);
     throw error;
   }
 };
@@ -132,13 +149,39 @@ export const closePool = async (): Promise<void> => {
   }
 };
 
-// ========== POOL MONITORING ==========
-// Log pool stats every 60 seconds
+// ========== POOL MONITORING - AGGRESSIVE FOR BUSY SERVER ==========
+// Log pool stats every 30 seconds (more frequent monitoring for busy server)
+// Alert if pool is getting exhausted
 setInterval(() => {
   const stats = getPoolStats();
-  if (stats.waiting > 0 || stats.active > stats.max * 0.8) {
-    console.warn(`⚠️ DB Pool Status: waiting=${stats.waiting}, active=${stats.active}, idle=${stats.idle}, total=${stats.total}/${stats.max}`);
+  const utilizationPercent = Math.round((stats.active / stats.max) * 100);
+  
+  // CRITICAL: Waiting queries = connections exhausted
+  if (stats.waiting > 0) {
+    console.error(
+      `🚨 CRITICAL: ${stats.waiting} queries WAITING for connection! ` +
+      `Active=${stats.active}/${stats.max} (${utilizationPercent}%)`
+    );
   }
-}, 60000);
+  
+  // WARNING: Pool over 75% utilized
+  if (stats.active > stats.max * 0.75) {
+    console.warn(
+      `⚠️ DB Pool High Utilization: ${utilizationPercent}% ` +
+      `(${stats.active}/${stats.max}), idle=${stats.idle}`
+    );
+  }
+  
+  // INFO: Normal operation
+  if (stats.waiting === 0 && stats.active <= stats.max * 0.75) {
+    // Only log periodically in normal operation to reduce noise
+    if (Math.random() < 0.1) { // Log 10% of the time
+      console.log(
+        `✅ DB Pool OK: ${utilizationPercent}% utilized ` +
+        `(${stats.active}/${stats.max}), idle=${stats.idle}, waiting=${stats.waiting}`
+      );
+    }
+  }
+}, 30000);
 
 export default pool;
