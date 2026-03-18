@@ -884,12 +884,16 @@ export class JTT808Server {
               ? `0x${alert.rawStatusFlag.toString(16).padStart(8, '0')}`
               : null,
             baseAlarmSetBits: alert.alarmFlagSetBits || [],
+            statusSetBits: alert.statusFlagSetBits || [],
             alarmFlags: alert.alarmFlags || null,
-            videoAlarms: alert.videoAlarms || null,
-            signalLossChannels: alert.signalLossChannels || [],
-            blockingChannels: alert.blockingChannels || [],
-            memoryFailures: alert.memoryFailures || null,
-            drivingBehavior: alert.drivingBehavior || null,
+            statusFlags: alert.statusFlags || null,
+            mileageKm: alert.mileageKm ?? null,
+            fuelLiters: alert.fuelLiters ?? null,
+            recordedSpeed: alert.recordedSpeed ?? null,
+            extendedVehicleSignals: alert.extendedVehicleSignals || null,
+            ioStatus: alert.ioStatus || null,
+            wirelessSignalStrength: alert.wirelessSignalStrength ?? null,
+            gnssSatelliteCount: alert.gnssSatelliteCount ?? null,
             vendorExtensions: alert.vendorExtensions || []
           }
         : null
@@ -959,6 +963,9 @@ export class JTT808Server {
                 timestamp: alert.timestamp?.toISOString?.() || null,
                 latitude: alert.latitude,
                 longitude: alert.longitude,
+                speed: alert.speed,
+                direction: alert.direction,
+                altitude: alert.altitude,
                 rawAlarmFlagHex: typeof alert.rawAlarmFlag === 'number'
                   ? `0x${alert.rawAlarmFlag.toString(16).padStart(8, '0')}`
                   : null,
@@ -966,12 +973,16 @@ export class JTT808Server {
                   ? `0x${alert.rawStatusFlag.toString(16).padStart(8, '0')}`
                   : null,
                 baseAlarmSetBits: alert.alarmFlagSetBits || [],
+                statusSetBits: alert.statusFlagSetBits || [],
                 alarmFlags: alert.alarmFlags || null,
-                videoAlarms: alert.videoAlarms || null,
-                signalLossChannels: alert.signalLossChannels || [],
-                blockingChannels: alert.blockingChannels || [],
-                memoryFailures: alert.memoryFailures || null,
-                drivingBehavior: alert.drivingBehavior || null,
+                statusFlags: alert.statusFlags || null,
+                mileageKm: alert.mileageKm ?? null,
+                fuelLiters: alert.fuelLiters ?? null,
+                recordedSpeed: alert.recordedSpeed ?? null,
+                extendedVehicleSignals: alert.extendedVehicleSignals || null,
+                ioStatus: alert.ioStatus || null,
+                wirelessSignalStrength: alert.wirelessSignalStrength ?? null,
+                gnssSatelliteCount: alert.gnssSatelliteCount ?? null,
                 vendorExtensions: alert.vendorExtensions || []
               }
             : null
@@ -3231,6 +3242,7 @@ export class JTT808Server {
     socket.write(response);
   }
 }
+
 
 
 

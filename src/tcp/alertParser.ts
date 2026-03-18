@@ -1,4 +1,13 @@
-import { AbnormalDrivingBehavior, VideoAlarmStatus, LocationAlert, AlarmFlags, VendorAdditionalInfoExtension } from '../types/jtt';
+import {
+  AbnormalDrivingBehavior,
+  VideoAlarmStatus,
+  LocationAlert,
+  AlarmFlags,
+  VendorAdditionalInfoExtension,
+  LocationStatusFlags,
+  ExtendedVehicleSignalStatus,
+  IoStatusFlags
+} from '../types/jtt';
 import { getKnownVendorCodes } from '../protocol/vendorAlarmCatalog';
 
 export class AlertParser {
@@ -37,7 +46,9 @@ export class AlertParser {
       alarmFlags: this.parseAlarmFlags(alarmFlag),
       alarmFlagSetBits: this.getSetBits(alarmFlag, 32),
       rawAlarmFlag: alarmFlag,
-      rawStatusFlag: statusFlag
+      rawStatusFlag: statusFlag,
+      statusFlagSetBits: this.getSetBits(statusFlag, 32),
+      statusFlags: this.parseStatusFlags(statusFlag)
     };
 
     // Parse additional information (after byte 28)
@@ -51,20 +62,30 @@ export class AlertParser {
       const infoData = body.slice(offset + 2, offset + 2 + infoLength);
       
       switch (infoId) {
-        case 0x14: // Video-related alarm
-          alert.videoAlarms = this.parseVideoAlarms(infoData);
+        case 0x01: // Mileage
+          if (infoData.length >= 4) alert.mileageKm = infoData.readUInt32BE(0) / 10;
           break;
-        case 0x15: // Video signal loss per channel
-          alert.signalLossChannels = this.parseChannelBits(infoData);
+        case 0x02: // Fuel level
+          if (infoData.length >= 2) alert.fuelLiters = infoData.readUInt16BE(0) / 10;
           break;
-        case 0x16: // Video signal blocking per channel
-          alert.blockingChannels = this.parseChannelBits(infoData);
+        case 0x03: // Speed from recorder
+          if (infoData.length >= 2) alert.recordedSpeed = infoData.readUInt16BE(0) / 10;
           break;
-        case 0x17: // Memory failure status
-          alert.memoryFailures = this.parseMemoryFailures(infoData);
+        case 0x11: // Overspeed alarm additional information
+        case 0x12: // In/out area/route additional information
+        case 0x13: // Travel time alarm additional information
           break;
-        case 0x18: // Abnormal driving behavior details
-          alert.drivingBehavior = this.parseAbnormalDriving(infoData);
+        case 0x25: // Extended vehicle signal status
+          alert.extendedVehicleSignals = this.parseExtendedVehicleSignalStatus(infoData);
+          break;
+        case 0x2A: // IO status bit
+          alert.ioStatus = this.parseIoStatus(infoData);
+          break;
+        case 0x30: // Wireless communication signal strength
+          if (infoData.length >= 1) alert.wirelessSignalStrength = infoData.readUInt8(0);
+          break;
+        case 0x31: // GNSS satellite count
+          if (infoData.length >= 1) alert.gnssSatelliteCount = infoData.readUInt8(0);
           break;
         case 0x64: // Proprietary/active-safety ADAS extension (deployment-specific)
           this.pushVendorExtension(alert, infoId, infoData, 'ADAS');
@@ -172,6 +193,84 @@ export class AlertParser {
       collisionWarning: !!(alarmFlag & (1 << 29)),
       // JT/T 808 Table 24: rollover warning is bit30
       rolloverWarning: !!(alarmFlag & (1 << 30))
+    };
+  }
+
+  private static parseStatusFlags(statusFlag: number): LocationStatusFlags {
+    return {
+      accOn: !!(statusFlag & (1 << 0)),
+      positioned: !!(statusFlag & (1 << 1)),
+      southLatitude: !!(statusFlag & (1 << 2)),
+      westLongitude: !!(statusFlag & (1 << 3)),
+      outOfService: !!(statusFlag & (1 << 4)),
+      encrypted: !!(statusFlag & (1 << 5)),
+      loadStatus: ((statusFlag >> 8) & 0x03) as 0 | 1 | 2 | 3,
+      oilDisconnected: !!(statusFlag & (1 << 10)),
+      circuitDisconnected: !!(statusFlag & (1 << 11)),
+      doorLocked: !!(statusFlag & (1 << 12)),
+      door1Open: !!(statusFlag & (1 << 13)),
+      door2Open: !!(statusFlag & (1 << 14)),
+      door3Open: !!(statusFlag & (1 << 15)),
+      door4Open: !!(statusFlag & (1 << 16)),
+      door5Open: !!(statusFlag & (1 << 17)),
+      gpsPositioning: !!(statusFlag & (1 << 18)),
+      beidouPositioning: !!(statusFlag & (1 << 19)),
+      glonassPositioning: !!(statusFlag & (1 << 20)),
+      galileoPositioning: !!(statusFlag & (1 << 21))
+    };
+  }
+
+  private static parseExtendedVehicleSignalStatus(data: Buffer): ExtendedVehicleSignalStatus {
+    if (data.length < 4) {
+      return {
+        lowBeam: false,
+        highBeam: false,
+        rightTurn: false,
+        leftTurn: false,
+        brake: false,
+        reverse: false,
+        fogLight: false,
+        clearanceLight: false,
+        horn: false,
+        airConditioning: false,
+        neutral: false,
+        retarderWorking: false,
+        absWorking: false,
+        heaterWorking: false,
+        clutchEngaged: false,
+        setBits: []
+      };
+    }
+    const bits = data.readUInt32BE(0);
+    return {
+      lowBeam: !!(bits & (1 << 0)),
+      highBeam: !!(bits & (1 << 1)),
+      rightTurn: !!(bits & (1 << 2)),
+      leftTurn: !!(bits & (1 << 3)),
+      brake: !!(bits & (1 << 4)),
+      reverse: !!(bits & (1 << 5)),
+      fogLight: !!(bits & (1 << 6)),
+      clearanceLight: !!(bits & (1 << 7)),
+      horn: !!(bits & (1 << 8)),
+      airConditioning: !!(bits & (1 << 9)),
+      neutral: !!(bits & (1 << 10)),
+      retarderWorking: !!(bits & (1 << 11)),
+      absWorking: !!(bits & (1 << 12)),
+      heaterWorking: !!(bits & (1 << 13)),
+      clutchEngaged: !!(bits & (1 << 14)),
+      setBits: this.getSetBits(bits, 32)
+    };
+  }
+
+  private static parseIoStatus(data: Buffer): IoStatusFlags {
+    if (data.length < 2) {
+      return { deepSleep: false, sleep: false, setBits: [] };
+    }
+    const bits = data.readUInt16BE(0);
+    return {
+      deepSleep: !!(bits & (1 << 0)),
+      sleep: !!(bits & (1 << 1)),
+      setBits: this.getSetBits(bits, 16)
     };
   }
 

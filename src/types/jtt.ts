@@ -149,6 +149,53 @@ export interface AlarmFlags {
   rolloverWarning: boolean;
 }
 
+export interface LocationStatusFlags {
+  accOn: boolean;
+  positioned: boolean;
+  southLatitude: boolean;
+  westLongitude: boolean;
+  outOfService: boolean;
+  encrypted: boolean;
+  loadStatus: 0 | 1 | 2 | 3;
+  oilDisconnected: boolean;
+  circuitDisconnected: boolean;
+  doorLocked: boolean;
+  door1Open: boolean;
+  door2Open: boolean;
+  door3Open: boolean;
+  door4Open: boolean;
+  door5Open: boolean;
+  gpsPositioning: boolean;
+  beidouPositioning: boolean;
+  glonassPositioning: boolean;
+  galileoPositioning: boolean;
+}
+
+export interface ExtendedVehicleSignalStatus {
+  lowBeam: boolean;
+  highBeam: boolean;
+  rightTurn: boolean;
+  leftTurn: boolean;
+  brake: boolean;
+  reverse: boolean;
+  fogLight: boolean;
+  clearanceLight: boolean;
+  horn: boolean;
+  airConditioning: boolean;
+  neutral: boolean;
+  retarderWorking: boolean;
+  absWorking: boolean;
+  heaterWorking: boolean;
+  clutchEngaged: boolean;
+  setBits?: number[];
+}
+
+export interface IoStatusFlags {
+  deepSleep: boolean;
+  sleep: boolean;
+  setBits?: number[];
+}
+
 export interface LocationAlert {
   vehicleId: string;
   timestamp: Date;
@@ -162,6 +209,15 @@ export interface LocationAlert {
   alarmFlagSetBits?: number[]; // all set bits from JT/T 808 alarm DWORD
   rawAlarmFlag?: number;
   rawStatusFlag?: number;
+  statusFlagSetBits?: number[];
+  statusFlags?: LocationStatusFlags;
+  mileageKm?: number;
+  fuelLiters?: number;
+  recordedSpeed?: number;
+  extendedVehicleSignals?: ExtendedVehicleSignalStatus;
+  ioStatus?: IoStatusFlags;
+  wirelessSignalStrength?: number;
+  gnssSatelliteCount?: number;
   signalLossChannels?: number[]; // channels 1-32
   blockingChannels?: number[]; // channels 1-32
   memoryFailures?: { main: number[]; backup: number[]; };
