@@ -331,3 +331,38 @@ export const getVendorAlarmBySignalCode = (signalCode: string): VendorAlarmEntry
 export const getKnownVendorCodes = (): Set<number> => {
   return new Set<number>(getVendorAlarmCatalog().map((item) => item.code));
 };
+
+const STRUCTURED_ACTIVE_SAFETY_EVENT_CODE_MAP: Record<'ADAS' | 'DMS', Record<number, number>> = {
+  ADAS: {
+    1: 10001,
+    2: 10002,
+    3: 10003,
+    4: 10004,
+    5: 10005,
+    6: 10006,
+    7: 10007,
+    8: 10008,
+    16: 10016,
+    17: 10017
+  },
+  DMS: {
+    1: 10101,
+    2: 10102,
+    3: 10103,
+    4: 10104,
+    5: 10105,
+    6: 10106,
+    7: 10107,
+    16: 10116,
+    17: 10117
+  }
+};
+
+export const getVendorAlarmByStructuredEvent = (
+  domain: 'ADAS' | 'DMS',
+  eventType: number
+): VendorAlarmEntry | null => {
+  const code = STRUCTURED_ACTIVE_SAFETY_EVENT_CODE_MAP[domain]?.[eventType];
+  if (!Number.isFinite(code)) return null;
+  return getVendorAlarmByCode(code, { allowPlatformVideoCodes: false });
+};

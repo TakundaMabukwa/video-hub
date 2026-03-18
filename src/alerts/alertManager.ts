@@ -5,7 +5,7 @@ import { AlertEscalation } from './escalation';
 import { AlertNotifier } from './notifier';
 import { AlertStorageDB } from '../storage/alertStorageDB';
 import { VideoStorage } from '../storage/videoStorage';
-import { getVendorAlarmByCode, getVendorAlarmBySignalCode } from '../protocol/vendorAlarmCatalog';
+import { getVendorAlarmByCode, getVendorAlarmBySignalCode, getVendorAlarmByStructuredEvent } from '../protocol/vendorAlarmCatalog';
 import * as fs from 'fs';
 
 export enum AlertPriority {
@@ -877,6 +877,21 @@ export class AlertManager extends EventEmitter {
             signals.push(`vendor_additional_info_${extension.infoId}_${code}`);
           }
         }
+        if ((extension.infoId === 0x64 || extension.infoId === 0x65) && Number.isFinite(extension.eventType)) {
+          const structured = getVendorAlarmByStructuredEvent(
+            extension.domain === 'DMS' ? 'DMS' : 'ADAS',
+            Number(extension.eventType)
+          );
+          if (structured?.signalCode) {
+            signals.push(structured.signalCode);
+          } else {
+            const domainPrefix = extension.domain === 'DMS' ? 'dms' : 'adas';
+            signals.push(`${domainPrefix}_event_type_${extension.eventType}`);
+            if ((extension.alarmLevel ?? 0) > 0) {
+              signals.push(`${domainPrefix}_event_type_${extension.eventType}_level_${extension.alarmLevel}`);
+            }
+          }
+        }
       }
     }
 
@@ -1253,6 +1268,19 @@ export class AlertManager extends EventEmitter {
     }
 
     if (signal.startsWith('adas_')) {
+      const eventTypeMatch = signal.match(/^adas_event_type_(\d+)(?:_level_(\d+))?$/);
+      if (eventTypeMatch) {
+        const eventType = Number(eventTypeMatch[1]);
+        const level = eventTypeMatch[2] ? Number(eventTypeMatch[2]) : null;
+        return {
+          code: signal,
+          label: level === null ? `ADAS Alert Type ${eventType}` : `ADAS Alert Type ${eventType} (Level ${level})`,
+          meaning: level === null
+            ? `Structured 0x64 ADAS alert reported event type ${eventType}.`
+            : `Structured 0x64 ADAS alert reported event type ${eventType} with level ${level}.`,
+          source: 'JT/T 808 location additional info 0x64'
+        };
+      }
       const mapped = getVendorAlarmBySignalCode(signal);
       return {
         code: signal,
@@ -1263,6 +1291,19 @@ export class AlertManager extends EventEmitter {
     }
 
     if (signal.startsWith('dms_')) {
+      const eventTypeMatch = signal.match(/^dms_event_type_(\d+)(?:_level_(\d+))?$/);
+      if (eventTypeMatch) {
+        const eventType = Number(eventTypeMatch[1]);
+        const level = eventTypeMatch[2] ? Number(eventTypeMatch[2]) : null;
+        return {
+          code: signal,
+          label: level === null ? `DMS Alert Type ${eventType}` : `DMS Alert Type ${eventType} (Level ${level})`,
+          meaning: level === null
+            ? `Structured 0x65 DMS alert reported event type ${eventType}.`
+            : `Structured 0x65 DMS alert reported event type ${eventType} with level ${level}.`,
+          source: 'JT/T 808 location additional info 0x65'
+        };
+      }
       const mapped = getVendorAlarmBySignalCode(signal);
       return {
         code: signal,

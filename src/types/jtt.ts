@@ -114,6 +114,28 @@ export interface VendorAdditionalInfoExtension {
   rawHex: string;
   detectedCodes: number[];
   domain: 'ADAS' | 'DMS' | 'UNKNOWN';
+  alarmId?: number;
+  flagStatus?: number;
+  eventType?: number;
+  alarmLevel?: number;
+  sourceSpeed?: number;
+  sourceAltitude?: number;
+  sourceLatitude?: number;
+  sourceLongitude?: number;
+  sourceTimestamp?: Date;
+  vehicleStatus?: number;
+  frontObjectSpeed?: number;
+  frontObjectDistance?: number;
+  deviationType?: number;
+  roadSignType?: number;
+  roadSignData?: number;
+  identification?: {
+    terminalId?: string;
+    timestamp?: Date;
+    sequenceNumber?: number;
+    attachmentCount?: number;
+    reserved?: number;
+  };
 }
 
 export interface AlarmFlags {

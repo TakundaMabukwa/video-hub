@@ -1,7 +1,7 @@
 import { strict as assert } from 'assert';
 import { JTT808Server } from '../tcp/server';
 import { AlertManager, AlertPriority } from '../alerts/alertManager';
-import { getVendorAlarmByCode, getVendorAlarmBySignalCode } from '../protocol/vendorAlarmCatalog';
+import { getVendorAlarmByCode, getVendorAlarmBySignalCode, getVendorAlarmByStructuredEvent } from '../protocol/vendorAlarmCatalog';
 
 const run = () => {
   process.env.ALERT_MODE = 'strict';
@@ -56,6 +56,16 @@ const run = () => {
   for (const code of expectedCodes) {
     assert(getVendorAlarmByCode(code), `Expected catalog code ${code}`);
   }
+
+  // 7) Structured 0x64/0x65 event types map onto named vendor alerts.
+  assert.equal(
+    getVendorAlarmByStructuredEvent('ADAS', 1)?.signalCode,
+    'adas_10001_forward_collision_warning'
+  );
+  assert.equal(
+    getVendorAlarmByStructuredEvent('DMS', 2)?.signalCode,
+    'dms_10102_handheld_phone_alarm'
+  );
 
   console.log('vendor-alert-conformance: ok');
 };

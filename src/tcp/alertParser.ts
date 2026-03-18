@@ -184,25 +184,83 @@ export class AlertParser {
     const extension: VendorAdditionalInfoExtension = {
       infoId,
       rawHex: data.toString('hex'),
-      detectedCodes: this.extractKnownVendorCodes(data),
+      detectedCodes: this.extractKnownVendorCodes(data, {
+        allowBinaryWordScan: false,
+        allowPlatformVideoCodes: false
+      }),
       domain
     };
+    if (domain === 'ADAS' || domain === 'DMS') {
+      Object.assign(extension, this.parseActiveSafetyAdditionalInfo(data));
+    }
     if (!Array.isArray(alert.vendorExtensions)) {
       alert.vendorExtensions = [];
     }
     alert.vendorExtensions.push(extension);
   }
 
-  private static extractKnownVendorCodes(data: Buffer): number[] {
+  private static parseActiveSafetyAdditionalInfo(data: Buffer): Partial<VendorAdditionalInfoExtension> {
+    // Official 0x64/0x65 active-safety additional info layout observed in deployment docs:
+    // alarmId(4) + flag(1) + eventType(1) + level(1) + context fields + snapshot + identification.
+    if (!data || data.length < 7) return {};
+
+    const parsed: Partial<VendorAdditionalInfoExtension> = {
+      alarmId: data.readUInt32BE(0),
+      flagStatus: data.readUInt8(4),
+      eventType: data.readUInt8(5),
+      alarmLevel: data.readUInt8(6)
+    };
+
+    if (data.length >= 13) {
+      parsed.frontObjectSpeed = data.readUInt8(7);
+      parsed.frontObjectDistance = data.readUInt8(8);
+      parsed.deviationType = data.readUInt8(9);
+      parsed.roadSignType = data.readUInt8(10);
+      parsed.roadSignData = data.readUInt8(11);
+      parsed.sourceSpeed = data.readUInt8(12);
+    }
+
+    if (data.length >= 29) {
+      parsed.sourceAltitude = data.readUInt16BE(13);
+      parsed.sourceLatitude = data.readUInt32BE(15) / 1000000;
+      parsed.sourceLongitude = data.readUInt32BE(19) / 1000000;
+      parsed.sourceTimestamp = this.parseTimestamp(data.slice(23, 29));
+    }
+
+    if (data.length >= 31) {
+      parsed.vehicleStatus = data.readUInt16BE(29);
+    }
+
+    if (data.length >= 47) {
+      parsed.identification = {
+        terminalId: data.slice(31, 38).toString('ascii').replace(/\0+$/, ''),
+        timestamp: this.parseTimestamp(data.slice(38, 44)),
+        sequenceNumber: data.readUInt8(44),
+        attachmentCount: data.readUInt8(45),
+        reserved: data.readUInt8(46)
+      };
+    }
+
+    return parsed;
+  }
+
+  private static extractKnownVendorCodes(
+    data: Buffer,
+    options?: { allowBinaryWordScan?: boolean; allowPlatformVideoCodes?: boolean }
+  ): number[] {
     if (!data || data.length === 0) return [];
     const known = getKnownVendorCodes();
     const found = new Set<number>();
+    const allowBinaryWordScan = options?.allowBinaryWordScan ?? true;
+    const allowPlatformVideoCodes = options?.allowPlatformVideoCodes ?? true;
 
-    for (let i = 0; i <= data.length - 2; i++) {
-      const be = data.readUInt16BE(i);
-      if (known.has(be)) found.add(be);
-      const le = data.readUInt16LE(i);
-      if (known.has(le)) found.add(le);
+    if (allowBinaryWordScan) {
+      for (let i = 0; i <= data.length - 2; i++) {
+        const be = data.readUInt16BE(i);
+        if (known.has(be) && (allowPlatformVideoCodes || be >= 10000)) found.add(be);
+        const le = data.readUInt16LE(i);
+        if (known.has(le) && (allowPlatformVideoCodes || le >= 10000)) found.add(le);
+      }
     }
 
     const text = data
