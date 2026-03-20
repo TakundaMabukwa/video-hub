@@ -19,6 +19,9 @@ export class UDPRTPServer {
   private onFrameCallback?: (vehicleId: string, channel: number, frame: Buffer, isIFrame: boolean) => void;
   private vehicleIdResolver?: (ipAddress: string) => string;
   private packetForwarder?: (packet: Buffer, vehicleId: string, transport: 'udp') => void;
+  private readonly verboseIngressLogs = ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.VERBOSE_RTP_INGRESS_LOGS ?? 'false').trim().toLowerCase()
+  );
 
   constructor(private port: number) {
     this.server = dgram.createSocket('udp4');
@@ -61,8 +64,11 @@ export class UDPRTPServer {
     this.packetCount++;
     
     const now = Date.now();
-    if (now - this.lastLogTime > 5000) {
+    if (this.verboseIngressLogs && now - this.lastLogTime > 5000) {
       console.log(`Processed ${this.packetCount} packets in last 5s`);
+      this.packetCount = 0;
+      this.lastLogTime = now;
+    } else if (now - this.lastLogTime > 5000) {
       this.packetCount = 0;
       this.lastLogTime = now;
     }

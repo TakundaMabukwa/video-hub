@@ -146,22 +146,34 @@ const API_PORT = parseInt(process.env.API_PORT || '3000');
 const SERVER_IP = process.env.SERVER_IP || 'localhost';
 const AUTO_SCREENSHOT_INTERVAL_MS = parseInt(process.env.AUTO_SCREENSHOT_INTERVAL_MS || '30000');
 const AUTO_SCREENSHOT_FALLBACK_DELAY_MS = parseInt(process.env.AUTO_SCREENSHOT_FALLBACK_DELAY_MS || '600');
-const BACKGROUND_STREAMS_ENABLED = envFlag('BACKGROUND_STREAMS_ENABLED', true);
+const INGRESS_ENABLED = envFlag('INGRESS_ENABLED', true);
+const ALERT_PROCESSING_ENABLED = envFlag('ALERT_PROCESSING_ENABLED', true);
+const VIDEO_PROCESSING_ENABLED = envFlag('VIDEO_PROCESSING_ENABLED', true);
+const DB_ENABLED = envFlag('DB_ENABLED', ALERT_PROCESSING_ENABLED);
+const SHOULD_USE_DB = DB_ENABLED;
+const BACKGROUND_STREAMS_ENABLED = envFlag('BACKGROUND_STREAMS_ENABLED', VIDEO_PROCESSING_ENABLED);
 const KEEP_STREAMS_WITHOUT_CLIENTS = envFlag(
   'KEEP_STREAMS_WITHOUT_CLIENTS',
   BACKGROUND_STREAMS_ENABLED
 );
 const AUTO_SCREENSHOT_FANOUT_ENABLED = envFlag('AUTO_SCREENSHOT_FANOUT_ENABLED', false);
 const BACKGROUND_STREAM_INTERVAL_MS = parseInt(process.env.BACKGROUND_STREAM_INTERVAL_MS || '45000');
-const INGRESS_ENABLED = envFlag('INGRESS_ENABLED', true);
-const ALERT_PROCESSING_ENABLED = envFlag('ALERT_PROCESSING_ENABLED', true);
-const VIDEO_PROCESSING_ENABLED = envFlag('VIDEO_PROCESSING_ENABLED', true);
-const DB_ENABLED = envFlag('DB_ENABLED', ALERT_PROCESSING_ENABLED);
-const SHOULD_USE_DB = DB_ENABLED;
 const ALERT_WORKER_URL = process.env.ALERT_WORKER_URL || '';
 const VIDEO_WORKER_URL = process.env.VIDEO_WORKER_URL || '';
 const LISTENER_SERVER_URL = process.env.LISTENER_SERVER_URL || '';
 const INTERNAL_WORKER_TOKEN = process.env.INTERNAL_WORKER_TOKEN || '';
+const MESSAGE_TRACE_ENABLED = envFlag(
+  'MESSAGE_TRACE_ENABLED',
+  INGRESS_ENABLED && (ALERT_PROCESSING_ENABLED || VIDEO_PROCESSING_ENABLED)
+);
+const DATA_WS_ENABLED = envFlag(
+  'DATA_WS_ENABLED',
+  MESSAGE_TRACE_ENABLED
+);
+const PROTOCOL_WS_ENABLED = envFlag(
+  'PROTOCOL_WS_ENABLED',
+  MESSAGE_TRACE_ENABLED
+);
 
 async function startServer() {
   console.log('Starting JT/T 1078 Video Ingestion Server...');
@@ -226,8 +238,8 @@ async function startServer() {
   app.use('/hls', express.static('hls'));
   
   const httpServer = createServer(app);
-  const dataWsServer = INGRESS_ENABLED ? new DataWebSocketServer('/ws/data') : null;
-  const protocolWsServer = INGRESS_ENABLED
+  const dataWsServer = INGRESS_ENABLED && DATA_WS_ENABLED ? new DataWebSocketServer('/ws/data') : null;
+  const protocolWsServer = INGRESS_ENABLED && PROTOCOL_WS_ENABLED
     ? new ProtocolWebSocketServer([
         '0x0001',
         '0x8001',
@@ -294,7 +306,7 @@ async function startServer() {
     });
   }
 
-  if (dataWsServer && protocolWsServer) {
+  if (MESSAGE_TRACE_ENABLED && dataWsServer && protocolWsServer) {
     tcpServer.setMessageTraceCallback((trace) => {
       dataWsServer.broadcast({
         type: 'PROTOCOL_MESSAGE',
@@ -560,8 +572,10 @@ async function startServer() {
     if (ALERT_PROCESSING_ENABLED) {
       console.log(`WebSocket - Alerts: ws://localhost:${API_PORT}/ws/alerts`);
     }
-    if (INGRESS_ENABLED) {
+    if (INGRESS_ENABLED && DATA_WS_ENABLED) {
       console.log(`WebSocket - Data: ws://localhost:${API_PORT}/ws/data`);
+    }
+    if (INGRESS_ENABLED && PROTOCOL_WS_ENABLED) {
       console.log(`WebSocket - Protocol All: ws://localhost:${API_PORT}/ws/protocol/all`);
       console.log(`WebSocket - Protocol 0x1205: ws://localhost:${API_PORT}/ws/protocol/0x1205`);
     }

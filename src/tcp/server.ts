@@ -149,6 +149,20 @@ export class JTT808Server {
     50,
     Number(process.env.MESSAGE_TRACE_BUFFER_SIZE || 300)
   );
+  private readonly messageTraceEnabled = ['1', 'true', 'yes', 'on'].includes(
+    String(
+      process.env.MESSAGE_TRACE_ENABLED ??
+        (process.env.ALERT_PROCESSING_ENABLED === 'false' && process.env.VIDEO_PROCESSING_ENABLED === 'false'
+          ? 'false'
+          : 'true')
+    ).trim().toLowerCase()
+  );
+  private readonly verboseIngressLogs = ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.VERBOSE_INGRESS_LOGS ?? 'false').trim().toLowerCase()
+  );
+  private readonly verboseLocationLogs = ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.VERBOSE_LOCATION_LOGS ?? 'false').trim().toLowerCase()
+  );
   private noisyLogGate = new Map<string, number>();
 
   private getNextSerial(): number {
@@ -294,7 +308,9 @@ export class JTT808Server {
     let buffer = Buffer.alloc(0);
     
     socket.on('data', async (data) => {
-      console.log(`[${clientAddr}] ${data.length}B: ${data.toString('hex').substring(0, 100)}${data.length > 50 ? '...' : ''}`);
+      if (this.verboseIngressLogs) {
+        console.log(`[${clientAddr}] ${data.length}B: ${data.toString('hex').substring(0, 100)}${data.length > 50 ? '...' : ''}`);
+      }
       buffer = Buffer.concat([buffer, data]);
       
       const rtpMagic = Buffer.from([0x30, 0x31, 0x63, 0x64]);
@@ -814,45 +830,53 @@ export class JTT808Server {
   }
 
   private handleLocationReport(message: any, socket: net.Socket, rawFrame?: Buffer): void {
-    console.log(`\n📍 Location Report from ${message.terminalPhone}`);
-    console.log(`Body length: ${message.body.length} bytes`);
-    console.log(`Body hex: ${message.body.toString('hex')}`);
-    
+    if (this.verboseLocationLogs) {
+      console.log(`\n📍 Location Report from ${message.terminalPhone}`);
+      console.log(`Body length: ${message.body.length} bytes`);
+      console.log(`Body hex: ${message.body.toString('hex')}`);
+    }
+
     // Parse basic location (first 28 bytes)
     if (message.body.length >= 28) {
       const alarmFlag = message.body.readUInt32BE(0);
       const statusFlag = message.body.readUInt32BE(4);
       const lat = message.body.readUInt32BE(8) / 1000000;
       const lon = message.body.readUInt32BE(12) / 1000000;
-      console.log(`Alarm flags: 0x${alarmFlag.toString(16).padStart(8, '0')}`);
-      console.log(`Status flags: 0x${statusFlag.toString(16).padStart(8, '0')}`);
-      console.log(`Location: ${lat}, ${lon}`);
-      
+      if (this.verboseLocationLogs) {
+        console.log(`Alarm flags: 0x${alarmFlag.toString(16).padStart(8, '0')}`);
+        console.log(`Status flags: 0x${statusFlag.toString(16).padStart(8, '0')}`);
+        console.log(`Location: ${lat}, ${lon}`);
+      }
+
       // Parse additional info fields
       let offset = 28;
-      console.log(`\nAdditional Info Fields:`);
+      if (this.verboseLocationLogs) {
+        console.log(`\nAdditional Info Fields:`);
+      }
       while (offset < message.body.length - 2) {
         const infoId = message.body.readUInt8(offset);
         const infoLength = message.body.readUInt8(offset + 1);
-        
+
         if (offset + 2 + infoLength > message.body.length) break;
-        
+
         const infoData = message.body.slice(offset + 2, offset + 2 + infoLength);
-        console.log(`  ID: 0x${infoId.toString(16).padStart(2, '0')} | Length: ${infoLength} | Data: ${infoData.toString('hex')}`);
-        
-        // Decode known alert fields
-        if (infoId === 0x14) console.log(`    → Video Alarms`);
-        if (infoId === 0x15) console.log(`    → Signal Loss Channels`);
-        if (infoId === 0x16) console.log(`    → Signal Blocking Channels`);
-        if (infoId === 0x17) console.log(`    → Memory Failures`);
-        if (infoId === 0x18) console.log(`    → Abnormal Driving Behavior`);
-        if (infoId === 0x64) console.log(`    → ADAS Extension (vendor/proprietary)`);
-        if (infoId === 0x65) console.log(`    → DMS Extension (vendor/proprietary)`);
-        
+        if (this.verboseLocationLogs) {
+          console.log(`  ID: 0x${infoId.toString(16).padStart(2, '0')} | Length: ${infoLength} | Data: ${infoData.toString('hex')}`);
+
+          // Decode known alert fields
+          if (infoId === 0x14) console.log(`    → Video Alarms`);
+          if (infoId === 0x15) console.log(`    → Signal Loss Channels`);
+          if (infoId === 0x16) console.log(`    → Signal Blocking Channels`);
+          if (infoId === 0x17) console.log(`    → Memory Failures`);
+          if (infoId === 0x18) console.log(`    → Abnormal Driving Behavior`);
+          if (infoId === 0x64) console.log(`    → ADAS Extension (vendor/proprietary)`);
+          if (infoId === 0x65) console.log(`    → DMS Extension (vendor/proprietary)`);
+        }
+
         offset += 2 + infoLength;
       }
-      
-      if (offset === 28) {
+
+      if (this.verboseLocationLogs && offset === 28) {
         console.log(`  ⚠️  NO ADDITIONAL INFO FIELDS - Cameras not sending alert data`);
       }
     }
@@ -2896,6 +2920,7 @@ export class JTT808Server {
   }
 
   private pushMessageTrace(message: any, rawFrame?: Buffer, parse?: Record<string, unknown>): void {
+    if (!this.messageTraceEnabled) return;
     const trace: MessageTraceEntry = {
       id: ++this.messageTraceSeq,
       receivedAt: new Date().toISOString(),
@@ -2936,6 +2961,7 @@ export class JTT808Server {
     body: Buffer,
     parse?: Record<string, unknown>
   ): void {
+    if (!this.messageTraceEnabled) return;
     const trace: MessageTraceEntry = {
       id: ++this.messageTraceSeq,
       receivedAt: new Date().toISOString(),

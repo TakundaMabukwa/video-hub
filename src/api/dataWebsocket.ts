@@ -7,6 +7,9 @@ export class DataWebSocketServer {
   private wss: WebSocketServer;
   private clients = new Set<WebSocket>();
   private path: string;
+  private verbose = ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.DATA_WS_VERBOSE_LOGS ?? 'false').trim().toLowerCase()
+  );
  
   constructor(path = '/ws/data') {
     this.path = path;
@@ -21,16 +24,22 @@ export class DataWebSocketServer {
  
     this.wss.on('connection', (ws, req) => {
       this.clients.add(ws);
-      console.log(`[WS:data] client connected (${this.clients.size}) from ${req.socket.remoteAddress}`);
+      if (this.verbose) {
+        console.log(`[WS:data] client connected (${this.clients.size}) from ${req.socket.remoteAddress}`);
+      }
       this.safeSend(ws, { type: 'hello', ts: Date.now() });
  
       ws.on('close', () => {
         this.clients.delete(ws);
-        console.log(`[WS:data] client disconnected (${this.clients.size})`);
+        if (this.verbose) {
+          console.log(`[WS:data] client disconnected (${this.clients.size})`);
+        }
       });
  
       ws.on('error', (err) => {
-        console.error('[WS:data] client error:', err);
+        if (this.verbose) {
+          console.error('[WS:data] client error:', err);
+        }
       });
     });
  
@@ -43,7 +52,9 @@ export class DataWebSocketServer {
     }, 25000);
  
     this.wss.on('close', () => clearInterval(interval));
-    console.log(`[WS:data] initialized on ${this.path}`);
+    if (this.verbose) {
+      console.log(`[WS:data] initialized on ${this.path}`);
+    }
   }
 
   public getPath(): string {
@@ -75,7 +86,9 @@ export class DataWebSocketServer {
       }
     }
  
-    console.log(`[WS:data] broadcast -> sent=${sent} skipped=${skipped}`);
+    if (this.verbose && (sent > 0 || skipped > 0)) {
+      console.log(`[WS:data] broadcast -> sent=${sent} skipped=${skipped}`);
+    }
   }
  
   public getClientCount() {

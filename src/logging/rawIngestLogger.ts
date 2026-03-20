@@ -5,6 +5,22 @@ export class RawIngestLogger {
   private static readonly dirPath = path.join(process.cwd(), 'logs');
   private static readonly filePath = path.join(RawIngestLogger.dirPath, 'raw-ingest.ndjson');
   private static readonly maxHexChars = 16384;
+  private static readonly enabled = RawIngestLogger.resolveEnabled();
+
+  private static resolveEnabled(): boolean {
+    const explicit = process.env.RAW_INGEST_LOGGING_ENABLED;
+    if (typeof explicit === 'string' && explicit.trim()) {
+      return ['1', 'true', 'yes', 'on'].includes(explicit.trim().toLowerCase());
+    }
+
+    const alertProcessing = ['1', 'true', 'yes', 'on'].includes(
+      String(process.env.ALERT_PROCESSING_ENABLED ?? 'true').trim().toLowerCase()
+    );
+    const videoProcessing = ['1', 'true', 'yes', 'on'].includes(
+      String(process.env.VIDEO_PROCESSING_ENABLED ?? 'true').trim().toLowerCase()
+    );
+    return alertProcessing || videoProcessing;
+  }
 
   private static ensureReady(): void {
     if (!fs.existsSync(this.dirPath)) {
@@ -22,6 +38,7 @@ export class RawIngestLogger {
   }
 
   static write(eventType: string, payload: Record<string, unknown>): void {
+    if (!this.enabled) return;
     try {
       this.ensureReady();
       const safePayload: Record<string, unknown> = { ...payload };
@@ -45,4 +62,3 @@ export class RawIngestLogger {
     }
   }
 }
-
