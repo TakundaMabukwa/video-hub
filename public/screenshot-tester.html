@@ -503,6 +503,7 @@
     const ALERT_SCREENSHOT_RETRY_MS = 30000;
     const MIN_READY_SECONDS = 3;
     const ALERT_API_BASE_STORAGE_KEY = 'screenshot_tester_alert_api_base';
+    let lastAlertBanner = '';
 
     function normalizeBaseUrl(value) {
       return String(value || '').trim().replace(/\/+$/, '');
@@ -743,7 +744,20 @@
 
     function setStatus(text, kind = 'status') {
       statusEl.className = 'status ' + kind;
-      statusEl.textContent = text;
+      const banner = String(lastAlertBanner || '').trim();
+      statusEl.textContent = banner ? `${text} | ${banner}` : text;
+    }
+
+    function setAlertBanner(text) {
+      lastAlertBanner = String(text || '').trim();
+      const current = String(statusEl.textContent || '').trim();
+      const base = current.split(' | matching alert(s):')[0].split(' | active alerts:')[0].trim();
+      if (base) {
+        statusEl.textContent = lastAlertBanner ? `${base} | ${lastAlertBanner}` : base;
+      } else if (lastAlertBanner) {
+        statusEl.className = 'status ok';
+        statusEl.textContent = lastAlertBanner;
+      }
     }
 
     function toLocalDatetimeValue(date) {
@@ -1619,6 +1633,35 @@
       alertsEl.innerHTML = alertHtml + protocolHtml || '<div class="meta">No alerts or protocol decode candidates found.</div>';
     }
 
+    function renderUnmatchedAlertCard(alert, reason = 'Did not match the current source/type filters.') {
+      const ts = alert?.timestamp ? new Date(alert.timestamp).toLocaleString() : 'n/a';
+      const sourceMessageId = String(alert?.metadata?.sourceMessageId || '').trim() || 'missing';
+      const signals = Array.isArray(alert?.metadata?.alertSignals) ? alert.metadata.alertSignals.join(', ') : 'none';
+      return `
+        <div class="alert-item" style="border-color:#6b4d1f;">
+          <div class="alert-head">
+            <div>
+              <div><strong>${alert.alert_type || alert.type || 'Alert'}</strong></div>
+              <div class="meta">${alert.id || 'n/a'}</div>
+            </div>
+            <div class="pill priority-low">not stored here</div>
+          </div>
+          <div class="meta">Vehicle: ${alert.device_id || alert.vehicleId || 'n/a'} | Channel: ${alert.channel ?? 'n/a'}</div>
+          <div class="meta">Time: ${ts}</div>
+          <div class="meta">SourceMessageId: ${sourceMessageId}</div>
+          <div class="meta">Signals: ${signals || 'none'}</div>
+          <div class="meta" style="margin-top:6px; color:#f0c36d;">${reason}</div>
+        </div>
+      `;
+    }
+
+    function renderCombinedAlertsWithUnmatched(models, protocolCandidates, unmatchedAlerts) {
+      const alertHtml = models.map((m) => alertCard(m.alert, m.screenshots, m.videosInfo, { ensure: m.ensure })).join('');
+      const protocolHtml = (protocolCandidates || []).map((item) => protocolReviewCard(item)).join('');
+      const unmatchedHtml = (unmatchedAlerts || []).map((item) => renderUnmatchedAlertCard(item.alert, item.reason)).join('');
+      alertsEl.innerHTML = alertHtml + protocolHtml + unmatchedHtml || '<div class="meta">No alerts or protocol decode candidates found.</div>';
+    }
+
     async function fetchProtocolDecodeReview(limitOverride) {
       const limit = Math.max(10, Math.min(200, Number(limitOverride || limitEl.value || ALERT_FETCH_LIMIT_DEFAULT)));
       const vehicleId = String(vehicleIdEl.value || '').trim();
@@ -1777,14 +1820,17 @@
         }
 
         let alerts = [];
+        let allAlerts = [];
         let protocolCandidates = [];
         try {
           const res = await fetch(alertApiUrl(`/api/alerts/active?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`), { cache: 'no-store' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json().catch(() => ({}));
-          alerts = Array.isArray(data.alerts) ? data.alerts.filter((a) => matchesSourceFilter(a) && matchesAlertTypeFilter(a)) : [];
+          allAlerts = Array.isArray(data.alerts) ? data.alerts : [];
+          alerts = allAlerts.filter((a) => matchesSourceFilter(a) && matchesAlertTypeFilter(a));
         } catch (_) {
           alerts = [];
+          allAlerts = [];
         }
 
         if (alerts.length === 0) {
@@ -1792,7 +1838,8 @@
             const res = await fetch(alertApiUrl(`/api/alerts?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`), { cache: 'no-store' });
             if (res.ok) {
               const data = await res.json().catch(() => ({}));
-              alerts = Array.isArray(data.alerts) ? data.alerts.filter((a) => matchesSourceFilter(a) && matchesAlertTypeFilter(a)) : [];
+              allAlerts = Array.isArray(data.alerts) ? data.alerts : allAlerts;
+              alerts = allAlerts.filter((a) => matchesSourceFilter(a) && matchesAlertTypeFilter(a));
             }
           } catch (_) {}
         }
@@ -1806,10 +1853,29 @@
 
         mergeLiveAlertStore(alerts);
         alerts = getLiveAlerts(limit, minutes, vehicleFilter);
+        const renderedAlertIds = new Set(alerts.map((a) => String(a?.id || '').trim()).filter(Boolean));
+        const unmatchedAlerts = allAlerts
+          .filter((a) => {
+            const id = String(a?.id || '').trim();
+            if (!id || renderedAlertIds.has(id)) return false;
+            if (vehicleFilter) {
+              const candidateVehicleId = String(a?.vehicleId || a?.device_id || '').trim();
+              if (candidateVehicleId !== vehicleFilter) return false;
+            }
+            return true;
+          })
+          .slice(0, 20)
+          .map((alert) => {
+            const sourceMessageId = String(alert?.metadata?.sourceMessageId || '').trim();
+            const reason = sourceMessageId
+              ? `Filtered out by the current source/type filter. sourceMessageId=${sourceMessageId}`
+              : 'Alert exists but has no sourceMessageId metadata, so it will not match the strict 0x0200/0x0704 filter.';
+            return { alert, reason };
+          });
 
         const byAlertId = getFallbackScreenshotsByAlertId();
         const initialModels = getAlertRenderModels(alerts, byAlertId);
-        renderCombinedAlerts(initialModels, protocolCandidates);
+        renderCombinedAlertsWithUnmatched(initialModels, protocolCandidates, unmatchedAlerts);
 
         const priorityAlerts = alerts.slice(0, mediaHydrateLimit);
         await hydrateAlertsMedia(priorityAlerts);
@@ -1825,7 +1891,7 @@
           }
         }
 
-        renderCombinedAlerts(hydratedModels, protocolCandidates);
+        renderCombinedAlertsWithUnmatched(hydratedModels, protocolCandidates, unmatchedAlerts);
         const withAnyScreenshots = hydratedModels.filter((m) => (m.screenshots || []).length > 0).length;
         const withAnyVideos = hydratedModels.filter((m) => {
           const info = getAlertVideoInfo(m.alert, m.videosInfo);
@@ -1833,9 +1899,12 @@
         }).length;
         const nowText = new Date().toLocaleTimeString();
         const sourceLabel = alertsWsConnected ? 'source: live websocket' : 'source: api fallback';
-        summaryEl.textContent = `${alerts.length} stored alert(s) | ${protocolCandidates.length} protocol candidate(s) | with screenshots: ${withAnyScreenshots} | with video: ${withAnyVideos} | ${sourceLabel} | last update: ${nowText}${autoRequestedCount ? ` | video requests started: ${autoRequestedCount}` : ''}`;
+        const alertBanner = `matching alert(s): ${alerts.length} | unmatched alert(s): ${unmatchedAlerts.length} | protocol candidate(s): ${protocolCandidates.length}`;
+        setAlertBanner(alertBanner);
+        summaryEl.textContent = `${alerts.length} matching alert(s) | ${unmatchedAlerts.length} unmatched alert(s) | ${protocolCandidates.length} protocol candidate(s) | with screenshots: ${withAnyScreenshots} | with video: ${withAnyVideos} | ${sourceLabel} | last update: ${nowText}${autoRequestedCount ? ` | video requests started: ${autoRequestedCount}` : ''}`;
       } catch (err) {
         setStatus(`Alert refresh error: ${err.message}`, 'err');
+        setAlertBanner('');
         const fallbackAlerts = getLiveAlerts(
           Math.max(10, Math.min(ALERT_FETCH_LIMIT_MAX, Number(limitEl.value || ALERT_FETCH_LIMIT_DEFAULT))),
           Math.max(1, Math.min(10080, Number(minutesEl.value || 30))),
@@ -1843,7 +1912,7 @@
         );
         const byAlertId = getFallbackScreenshotsByAlertId();
         const models = getAlertRenderModels(fallbackAlerts, byAlertId);
-        renderCombinedAlerts(models, protocolDecodeReviewCache);
+        renderCombinedAlertsWithUnmatched(models, protocolDecodeReviewCache, []);
         if (fallbackAlerts.length === 0 && protocolDecodeReviewCache.length === 0) {
           alertsEl.innerHTML = '<div class="meta">Failed to load alerts. Check API connectivity.</div>';
         }
@@ -2010,6 +2079,7 @@
         const data = await res.json();
         mergeLiveAlertStore(Array.isArray(data?.alerts) ? data.alerts : []);
         const currentCount = Number(data.count || 0);
+        setAlertBanner(`active alerts: ${currentCount}`);
 
         if (lastAlertCount === null) {
           lastAlertCount = currentCount;
