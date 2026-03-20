@@ -1759,10 +1759,34 @@ export class JTT808Server {
       alert.alarmFlags.overspeed ||
       alert.alarmFlags.fatigue ||
       alert.alarmFlags.dangerousDriving ||
+      alert.alarmFlags.gnssModuleFailure ||
+      alert.alarmFlags.gnssAntennaDisconnected ||
+      alert.alarmFlags.gnssAntennaShortCircuit ||
+      alert.alarmFlags.terminalPowerUndervoltage ||
+      alert.alarmFlags.terminalPowerFailure ||
+      alert.alarmFlags.terminalDisplayFailure ||
+      alert.alarmFlags.ttsModuleFailure ||
+      alert.alarmFlags.cameraFailure ||
+      alert.alarmFlags.transportIcCardModuleFailure ||
       alert.alarmFlags.overspeedWarning ||
       alert.alarmFlags.fatigueWarning ||
+      alert.alarmFlags.vibrationAlarm ||
+      alert.alarmFlags.lightAlarm ||
+      alert.alarmFlags.magneticInductiveAlarm ||
+      alert.alarmFlags.accumulatedDrivingTimeAlarm ||
+      alert.alarmFlags.overtimeParking ||
+      alert.alarmFlags.areaEntryExitAlarm ||
+      alert.alarmFlags.routeEntryExitAlarm ||
+      alert.alarmFlags.routeTravelTimeAlarm ||
+      alert.alarmFlags.routeDeviationAlarm ||
+      alert.alarmFlags.vssFailure ||
+      alert.alarmFlags.abnormalFuelCapacity ||
+      alert.alarmFlags.vehicleTheft ||
+      alert.alarmFlags.illegalIgnition ||
+      alert.alarmFlags.illegalDisplacement ||
       alert.alarmFlags.collisionWarning ||
-      alert.alarmFlags.rolloverWarning
+      alert.alarmFlags.rolloverWarning ||
+      alert.alarmFlags.illegalDoorOpenAlarm
     ));
     const hasAnyBaseAlarmBit = (alert.alarmFlagSetBits?.length || 0) > 0;
     const hasBaseAlarmFlags = hasKnownBaseAlarmFlags || hasAnyBaseAlarmBit;
@@ -2103,10 +2127,34 @@ export class JTT808Server {
     if (bit === 1) return 'jt808_overspeed';
     if (bit === 2) return 'jt808_fatigue';
     if (bit === 3) return 'jt808_dangerous_driving';
+    if (bit === 4) return 'jt808_gnss_module_failure';
+    if (bit === 5) return 'jt808_gnss_antenna_disconnected';
+    if (bit === 6) return 'jt808_gnss_antenna_short_circuit';
+    if (bit === 7) return 'jt808_terminal_power_undervoltage';
+    if (bit === 8) return 'jt808_terminal_power_failure';
+    if (bit === 9) return 'jt808_terminal_display_failure';
+    if (bit === 10) return 'jt808_tts_module_failure';
+    if (bit === 11) return 'jt808_camera_failure';
+    if (bit === 12) return 'jt808_transport_ic_card_module_failure';
     if (bit === 13) return 'jt808_overspeed_warning';
     if (bit === 14) return 'jt808_fatigue_warning';
+    if (bit === 15) return 'jt808_vibration_alarm';
+    if (bit === 16) return 'jt808_light_alarm';
+    if (bit === 17) return 'jt808_magnetic_inductive_alarm';
+    if (bit === 18) return 'jt808_accumulated_driving_time_alarm';
+    if (bit === 19) return 'jt808_overtime_parking';
+    if (bit === 20) return 'jt808_area_entry_exit_alarm';
+    if (bit === 21) return 'jt808_route_entry_exit_alarm';
+    if (bit === 22) return 'jt808_route_travel_time_alarm';
+    if (bit === 23) return 'jt808_route_deviation_alarm';
+    if (bit === 24) return 'jt808_vss_failure';
+    if (bit === 25) return 'jt808_abnormal_fuel_capacity';
+    if (bit === 26) return 'jt808_vehicle_theft';
+    if (bit === 27) return 'jt808_illegal_ignition';
+    if (bit === 28) return 'jt808_illegal_displacement';
     if (bit === 29) return 'jt808_collision_warning';
     if (bit === 30) return 'jt808_rollover_warning';
+    if (bit === 31) return 'jt808_illegal_door_open_alarm';
     if (bit === 32) return 'jtt1078_video_signal_loss';
     if (bit === 33) return 'jtt1078_video_signal_blocking';
     if (bit === 34) return 'jtt1078_storage_failure';
@@ -2120,8 +2168,8 @@ export class JTT808Server {
 
   private getPriorityForResourceAlarmBit(bit: number): AlertPriority {
     if (bit === 0 || bit === 29 || bit === 30) return AlertPriority.CRITICAL;
-    if (bit === 2 || bit === 3 || bit === 34 || bit === 37) return AlertPriority.HIGH;
-    if (bit === 1 || bit === 13 || bit === 14 || (bit >= 32 && bit <= 38)) return AlertPriority.MEDIUM;
+    if (bit === 2 || bit === 3 || bit === 14 || bit === 15 || bit === 16 || bit === 17 || bit === 27 || bit === 28 || bit === 31 || bit === 34 || bit === 37) return AlertPriority.HIGH;
+    if (bit === 1 || bit === 7 || bit === 8 || bit === 11 || bit === 13 || bit === 18 || bit === 19 || bit === 20 || bit === 21 || bit === 22 || bit === 23 || bit === 24 || bit === 25 || bit === 26 || (bit >= 32 && bit <= 38)) return AlertPriority.MEDIUM;
     return AlertPriority.LOW;
   }
 

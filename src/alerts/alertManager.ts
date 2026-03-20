@@ -507,6 +507,12 @@ export class AlertManager extends EventEmitter {
     if (alert.alarmFlags?.fatigue ||
         alert.alarmFlags?.dangerousDriving ||
         alert.alarmFlags?.fatigueWarning ||
+        alert.alarmFlags?.vibrationAlarm ||
+        alert.alarmFlags?.lightAlarm ||
+        alert.alarmFlags?.magneticInductiveAlarm ||
+        alert.alarmFlags?.illegalIgnition ||
+        alert.alarmFlags?.illegalDisplacement ||
+        alert.alarmFlags?.illegalDoorOpenAlarm ||
         alert.drivingBehavior?.fatigue ||
         alert.drivingBehavior?.phoneCall || 
         alert.drivingBehavior?.smoking ||
@@ -541,6 +547,12 @@ export class AlertManager extends EventEmitter {
       signalCode === 'jt808_fatigue' ||
       signalCode === 'jt808_dangerous_driving' ||
       signalCode === 'jt808_fatigue_warning' ||
+      signalCode === 'jt808_vibration_alarm' ||
+      signalCode === 'jt808_light_alarm' ||
+      signalCode === 'jt808_magnetic_inductive_alarm' ||
+      signalCode === 'jt808_illegal_ignition' ||
+      signalCode === 'jt808_illegal_displacement' ||
+      signalCode === 'jt808_illegal_door_open_alarm' ||
       signalCode === 'jtt1078_behavior_fatigue' ||
       signalCode === 'jtt1078_behavior_phone_call' ||
       signalCode === 'jtt1078_behavior_smoking' ||
@@ -555,6 +567,17 @@ export class AlertManager extends EventEmitter {
     if (
       signalCode === 'jt808_overspeed' ||
       signalCode === 'jt808_overspeed_warning' ||
+      signalCode === 'jt808_terminal_power_undervoltage' ||
+      signalCode === 'jt808_terminal_power_failure' ||
+      signalCode === 'jt808_camera_failure' ||
+      signalCode === 'jt808_accumulated_driving_time_alarm' ||
+      signalCode === 'jt808_overtime_parking' ||
+      signalCode === 'jt808_area_entry_exit_alarm' ||
+      signalCode === 'jt808_route_entry_exit_alarm' ||
+      signalCode === 'jt808_route_travel_time_alarm' ||
+      signalCode === 'jt808_route_deviation_alarm' ||
+      signalCode === 'jt808_vss_failure' ||
+      signalCode === 'jt808_vehicle_theft' ||
       signalCode === 'jtt1078_video_signal_loss' ||
       signalCode === 'jtt1078_video_signal_blocking' ||
       signalCode === 'jtt1078_bus_overcrowding' ||
@@ -631,10 +654,22 @@ export class AlertManager extends EventEmitter {
     if (alert.alarmFlags?.emergency) return 'Emergency Alarm';
     if (alert.alarmFlags?.collisionWarning) return 'Collision Warning';
     if (alert.alarmFlags?.rolloverWarning) return 'Rollover Warning';
+    if (alert.alarmFlags?.lightAlarm) return 'Light Alarm';
+    if (alert.alarmFlags?.magneticInductiveAlarm) return 'Magnetic Inductive Alarm';
+    if (alert.alarmFlags?.vibrationAlarm) return 'Vibration Alarm';
+    if (alert.alarmFlags?.illegalDoorOpenAlarm) return 'Illegal Door Open Alarm';
+    if (alert.alarmFlags?.illegalIgnition) return 'Illegal Ignition Alarm';
+    if (alert.alarmFlags?.illegalDisplacement) return 'Illegal Vehicle Displacement';
     if (alert.drivingBehavior?.fatigue || alert.alarmFlags?.fatigue) return 'Driver Fatigue';
     if (alert.drivingBehavior?.phoneCall || alert.alarmFlags?.dangerousDriving) return 'Dangerous Driving Behavior';
     if (alert.drivingBehavior?.smoking) return 'Smoking While Driving';
     if (alert.alarmFlags?.overspeed || alert.alarmFlags?.overspeedWarning) return 'Overspeed Alarm';
+    if (alert.alarmFlags?.terminalPowerFailure) return 'Terminal Power Failure';
+    if (alert.alarmFlags?.terminalPowerUndervoltage) return 'Terminal Power Undervoltage';
+    if (alert.alarmFlags?.cameraFailure) return 'Camera Failure';
+    if (alert.alarmFlags?.overtimeParking) return 'Overtime Parking';
+    if (alert.alarmFlags?.routeDeviationAlarm) return 'Route Deviation Alarm';
+    if (alert.alarmFlags?.vehicleTheft) return 'Vehicle Theft Alarm';
     if (alert.videoAlarms?.storageFailure) return 'Storage Failure';
     if (alert.videoAlarms?.videoSignalLoss) return 'Video Signal Loss';
     if (alert.videoAlarms?.videoSignalBlocking) return 'Video Signal Blocked';
@@ -647,10 +682,22 @@ export class AlertManager extends EventEmitter {
     if (signalCode === 'jt808_emergency') return 'Emergency Alarm';
     if (signalCode === 'jt808_collision_warning') return 'Collision Warning';
     if (signalCode === 'jt808_rollover_warning') return 'Rollover Warning';
+    if (signalCode === 'jt808_light_alarm') return 'Light Alarm';
+    if (signalCode === 'jt808_magnetic_inductive_alarm') return 'Magnetic Inductive Alarm';
+    if (signalCode === 'jt808_vibration_alarm') return 'Vibration Alarm';
+    if (signalCode === 'jt808_illegal_door_open_alarm') return 'Illegal Door Open Alarm';
+    if (signalCode === 'jt808_illegal_ignition') return 'Illegal Ignition Alarm';
+    if (signalCode === 'jt808_illegal_displacement') return 'Illegal Vehicle Displacement';
     if (signalCode === 'jt808_fatigue' || signalCode === 'jtt1078_behavior_fatigue') return 'Driver Fatigue';
     if (signalCode === 'jt808_dangerous_driving' || signalCode === 'jtt1078_behavior_phone_call') return 'Dangerous Driving Behavior';
     if (signalCode === 'jtt1078_behavior_smoking') return 'Smoking While Driving';
     if (signalCode === 'jt808_overspeed' || signalCode === 'jt808_overspeed_warning') return 'Overspeed Alarm';
+    if (signalCode === 'jt808_terminal_power_failure') return 'Terminal Power Failure';
+    if (signalCode === 'jt808_terminal_power_undervoltage') return 'Terminal Power Undervoltage';
+    if (signalCode === 'jt808_camera_failure') return 'Camera Failure';
+    if (signalCode === 'jt808_overtime_parking') return 'Overtime Parking';
+    if (signalCode === 'jt808_route_deviation_alarm') return 'Route Deviation Alarm';
+    if (signalCode === 'jt808_vehicle_theft') return 'Vehicle Theft Alarm';
     if (signalCode === 'jtt1078_storage_failure' || signalCode === 'platform_video_alarm_0103') return 'Storage Failure';
     if (signalCode === 'jtt1078_video_signal_loss' || signalCode === 'platform_video_alarm_0101') return 'Video Signal Loss';
     if (signalCode === 'jtt1078_video_signal_blocking' || signalCode === 'platform_video_alarm_0102') return 'Video Signal Blocked';
@@ -775,38 +822,41 @@ export class AlertManager extends EventEmitter {
   private extractAlertSignals(alert: LocationAlert): string[] {
     const signals: string[] = [];
 
-    // JT/T 808 Table 24 documented alarm bits.
-    // bit15~bit17 are reserved in the standard and intentionally ignored.
+    // JT/T 808 alarm bits.
+    // Some field deployments/document sets use named meanings for bit15~bit17 and bit25.
     const jt808BitSignalMap: Record<number, string> = {
       0: 'jt808_emergency',
       1: 'jt808_overspeed',
       2: 'jt808_fatigue',
       3: 'jt808_dangerous_driving',
-      4: 'jt808_alarm_bit_4',
-      5: 'jt808_alarm_bit_5',
-      6: 'jt808_alarm_bit_6',
-      7: 'jt808_alarm_bit_7',
-      8: 'jt808_alarm_bit_8',
-      9: 'jt808_alarm_bit_9',
-      10: 'jt808_alarm_bit_10',
-      11: 'jt808_alarm_bit_11',
-      12: 'jt808_alarm_bit_12',
+      4: 'jt808_gnss_module_failure',
+      5: 'jt808_gnss_antenna_disconnected',
+      6: 'jt808_gnss_antenna_short_circuit',
+      7: 'jt808_terminal_power_undervoltage',
+      8: 'jt808_terminal_power_failure',
+      9: 'jt808_terminal_display_failure',
+      10: 'jt808_tts_module_failure',
+      11: 'jt808_camera_failure',
+      12: 'jt808_transport_ic_card_module_failure',
       13: 'jt808_overspeed_warning',
       14: 'jt808_fatigue_warning',
-      18: 'jt808_alarm_bit_18',
-      19: 'jt808_alarm_bit_19',
-      20: 'jt808_alarm_bit_20',
-      21: 'jt808_alarm_bit_21',
-      22: 'jt808_alarm_bit_22',
-      23: 'jt808_alarm_bit_23',
-      24: 'jt808_alarm_bit_24',
-      25: 'jt808_alarm_bit_25',
-      26: 'jt808_alarm_bit_26',
-      27: 'jt808_alarm_bit_27',
-      28: 'jt808_alarm_bit_28',
+      15: 'jt808_vibration_alarm',
+      16: 'jt808_light_alarm',
+      17: 'jt808_magnetic_inductive_alarm',
+      18: 'jt808_accumulated_driving_time_alarm',
+      19: 'jt808_overtime_parking',
+      20: 'jt808_area_entry_exit_alarm',
+      21: 'jt808_route_entry_exit_alarm',
+      22: 'jt808_route_travel_time_alarm',
+      23: 'jt808_route_deviation_alarm',
+      24: 'jt808_vss_failure',
+      25: 'jt808_abnormal_fuel_capacity',
+      26: 'jt808_vehicle_theft',
+      27: 'jt808_illegal_ignition',
+      28: 'jt808_illegal_displacement',
       29: 'jt808_collision_warning',
       30: 'jt808_rollover_warning',
-      31: 'jt808_alarm_bit_31'
+      31: 'jt808_illegal_door_open_alarm'
     };
 
     const baseBits = new Set<number>(alert.alarmFlagSetBits || []);
@@ -815,10 +865,34 @@ export class AlertManager extends EventEmitter {
       if (alert.alarmFlags.overspeed) baseBits.add(1);
       if (alert.alarmFlags.fatigue) baseBits.add(2);
       if (alert.alarmFlags.dangerousDriving) baseBits.add(3);
+      if (alert.alarmFlags.gnssModuleFailure) baseBits.add(4);
+      if (alert.alarmFlags.gnssAntennaDisconnected) baseBits.add(5);
+      if (alert.alarmFlags.gnssAntennaShortCircuit) baseBits.add(6);
+      if (alert.alarmFlags.terminalPowerUndervoltage) baseBits.add(7);
+      if (alert.alarmFlags.terminalPowerFailure) baseBits.add(8);
+      if (alert.alarmFlags.terminalDisplayFailure) baseBits.add(9);
+      if (alert.alarmFlags.ttsModuleFailure) baseBits.add(10);
+      if (alert.alarmFlags.cameraFailure) baseBits.add(11);
+      if (alert.alarmFlags.transportIcCardModuleFailure) baseBits.add(12);
       if (alert.alarmFlags.overspeedWarning) baseBits.add(13);
       if (alert.alarmFlags.fatigueWarning) baseBits.add(14);
+      if (alert.alarmFlags.vibrationAlarm) baseBits.add(15);
+      if (alert.alarmFlags.lightAlarm) baseBits.add(16);
+      if (alert.alarmFlags.magneticInductiveAlarm) baseBits.add(17);
+      if (alert.alarmFlags.accumulatedDrivingTimeAlarm) baseBits.add(18);
+      if (alert.alarmFlags.overtimeParking) baseBits.add(19);
+      if (alert.alarmFlags.areaEntryExitAlarm) baseBits.add(20);
+      if (alert.alarmFlags.routeEntryExitAlarm) baseBits.add(21);
+      if (alert.alarmFlags.routeTravelTimeAlarm) baseBits.add(22);
+      if (alert.alarmFlags.routeDeviationAlarm) baseBits.add(23);
+      if (alert.alarmFlags.vssFailure) baseBits.add(24);
+      if (alert.alarmFlags.abnormalFuelCapacity) baseBits.add(25);
+      if (alert.alarmFlags.vehicleTheft) baseBits.add(26);
+      if (alert.alarmFlags.illegalIgnition) baseBits.add(27);
+      if (alert.alarmFlags.illegalDisplacement) baseBits.add(28);
       if (alert.alarmFlags.collisionWarning) baseBits.add(29);
       if (alert.alarmFlags.rolloverWarning) baseBits.add(30);
+      if (alert.alarmFlags.illegalDoorOpenAlarm) baseBits.add(31);
     }
     for (const bit of Array.from(baseBits).sort((a, b) => a - b)) {
       const signal = jt808BitSignalMap[bit];

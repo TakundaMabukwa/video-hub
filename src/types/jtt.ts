@@ -21,6 +21,8 @@ export interface JTT808Message {
   bodyLength: number;
   terminalPhone: string;
   serialNumber: number;
+  protocolVersion?: number;
+  versionFlag?: boolean;
   isSubpackage?: boolean;
   packetCount?: number;
   packetIndex?: number;
@@ -143,10 +145,34 @@ export interface AlarmFlags {
   overspeed: boolean;
   fatigue: boolean;
   dangerousDriving: boolean;
+  gnssModuleFailure: boolean;
+  gnssAntennaDisconnected: boolean;
+  gnssAntennaShortCircuit: boolean;
+  terminalPowerUndervoltage: boolean;
+  terminalPowerFailure: boolean;
+  terminalDisplayFailure: boolean;
+  ttsModuleFailure: boolean;
+  cameraFailure: boolean;
+  transportIcCardModuleFailure: boolean;
   overspeedWarning: boolean;
   fatigueWarning: boolean;
+  vibrationAlarm: boolean;
+  lightAlarm: boolean;
+  magneticInductiveAlarm: boolean;
+  accumulatedDrivingTimeAlarm: boolean;
+  overtimeParking: boolean;
+  areaEntryExitAlarm: boolean;
+  routeEntryExitAlarm: boolean;
+  routeTravelTimeAlarm: boolean;
+  routeDeviationAlarm: boolean;
+  vssFailure: boolean;
+  abnormalFuelCapacity: boolean;
+  vehicleTheft: boolean;
+  illegalIgnition: boolean;
+  illegalDisplacement: boolean;
   collisionWarning: boolean;
   rolloverWarning: boolean;
+  illegalDoorOpenAlarm: boolean;
 }
 
 export interface LocationStatusFlags {
@@ -196,6 +222,34 @@ export interface IoStatusFlags {
   setBits?: number[];
 }
 
+export interface OverspeedAdditionalInfo {
+  locationType: number;
+  areaOrRouteId?: number;
+}
+
+export interface AreaRouteAdditionalInfo {
+  locationType: number;
+  areaOrRouteId: number;
+  direction: 0 | 1;
+}
+
+export interface RouteTravelTimeAdditionalInfo {
+  routeId: number;
+  travelTimeSeconds: number;
+  result: 0 | 1;
+}
+
+export interface AnalogSignalStatus {
+  ad0: number;
+  ad1: number;
+}
+
+export interface AdditionalInfoItem {
+  infoId: number;
+  length: number;
+  rawHex: string;
+}
+
 export interface LocationAlert {
   vehicleId: string;
   timestamp: Date;
@@ -216,8 +270,14 @@ export interface LocationAlert {
   recordedSpeed?: number;
   extendedVehicleSignals?: ExtendedVehicleSignalStatus;
   ioStatus?: IoStatusFlags;
+  manualConfirmAlarmEventId?: number;
+  overspeedAdditionalInfo?: OverspeedAdditionalInfo;
+  areaRouteAdditionalInfo?: AreaRouteAdditionalInfo;
+  routeTravelTimeAdditionalInfo?: RouteTravelTimeAdditionalInfo;
+  analogSignals?: AnalogSignalStatus;
   wirelessSignalStrength?: number;
   gnssSatelliteCount?: number;
+  additionalInfoItems?: AdditionalInfoItem[];
   signalLossChannels?: number[]; // channels 1-32
   blockingChannels?: number[]; // channels 1-32
   memoryFailures?: { main: number[]; backup: number[]; };

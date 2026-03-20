@@ -477,6 +477,7 @@
     const alertScreenshotState = new Map();
     const alertMediaCache = new Map();
     const liveAlertStore = new Map();
+    let protocolDecodeReviewCache = [];
     const AUTO_MEDIA_REQUESTS_ENABLED = false;
     const AUTO_VIDEO_REQUEST_MAX_CONCURRENCY = 2;
     const AUTO_VIDEO_REQUEST_MAX_PER_REFRESH = 0;
@@ -552,6 +553,95 @@
         default:
           return true;
       }
+    }
+
+    function getProtocolMessageFilter() {
+      const filter = String(alertSourceFilterEl?.value || 'location').trim().toLowerCase();
+      if (filter === '0200') return '0x0200';
+      if (filter === '0704') return '0x0704';
+      return '';
+    }
+
+    function inferProtocolAlertType(candidate) {
+      const parsedType = String(candidate?.parsedAlert?.type || '').trim();
+      if (parsedType) return parsedType;
+      const firstSignal = Array.isArray(candidate?.emittedSignals) ? String(candidate.emittedSignals[0] || '').trim() : '';
+      if (firstSignal) return firstSignal;
+      return `Protocol ${candidate?.messageIdHex || 'message'} detected`;
+    }
+
+    function formatProtocolDecodeText(candidate) {
+      const signals = Array.isArray(candidate?.emittedSignals) ? candidate.emittedSignals.filter(Boolean) : [];
+      const additionalInfo = Array.isArray(candidate?.additionalInfo) ? candidate.additionalInfo : [];
+      const vendorDetails = Array.isArray(candidate?.parsedAlert?.vendorExtensions)
+        ? candidate.parsedAlert.vendorExtensions
+        : [];
+      const infoIds = additionalInfo
+        .map((item) => item?.infoId ?? item?.id ?? null)
+        .filter((value) => value !== null && value !== undefined)
+        .map((value) => `0x${Number(value).toString(16).padStart(2, '0')}`);
+      const vendorSummary = vendorDetails
+        .slice(0, 3)
+        .map((item) => {
+          const domain = String(item?.domain || '').trim();
+          const eventType = item?.eventType ?? item?.alarmType ?? item?.event ?? null;
+          const alarmId = item?.alarmId ?? null;
+          const parts = [domain || null, alarmId !== null ? `alarmId=${alarmId}` : null, eventType !== null ? `eventType=${eventType}` : null].filter(Boolean);
+          return parts.join(' ');
+        })
+        .filter(Boolean);
+
+      return [
+        `messageId: ${candidate?.messageIdHex || 'n/a'}`,
+        `parser: ${candidate?.parser || 'n/a'}`,
+        `signals: ${signals.length ? signals.join(', ') : 'none'}`,
+        `additionalInfo: ${infoIds.length ? infoIds.join(', ') : 'none'}`,
+        `vendor: ${vendorSummary.length ? vendorSummary.join(' | ') : 'none'}`
+      ].join(' | ');
+    }
+
+    function protocolReviewCard(candidate) {
+      const ts = candidate?.receivedAt ? new Date(candidate.receivedAt).toLocaleString() : 'n/a';
+      const nearbyAlerts = Array.isArray(candidate?.nearbyAlerts) ? candidate.nearbyAlerts : [];
+      const batchItems = Array.isArray(candidate?.batchItems) ? candidate.batchItems : [];
+      const parsedAlert = candidate?.parsedAlert || null;
+      const vehicleId = String(candidate?.vehicleId || parsedAlert?.vehicleId || 'n/a').trim();
+      const type = inferProtocolAlertType(candidate);
+      const statusClass = candidate?.parseSuccess ? 'priority-medium' : 'priority-low';
+      const nearbyHtml = nearbyAlerts.length
+        ? nearbyAlerts.slice(0, 4).map((item) => {
+            const sourceMessageId = item?.sourceMessageId ? ` | ${item.sourceMessageId}` : '';
+            return `<div class="meta">Linked alert: ${item.id} | ${item.type || 'Alert'}${sourceMessageId}</div>`;
+          }).join('')
+        : '<div class="meta">No linked persisted alert yet.</div>';
+      const batchHtml = batchItems.length
+        ? `<div class="meta" style="margin-top:4px;">Batch items: ${batchItems.length} | parsed ok: ${batchItems.filter((item) => item?.parseSuccess).length}</div>`
+        : '';
+
+      return `
+        <div class="alert-item" style="border-color:#35517f;">
+          <div class="alert-head">
+            <div>
+              <div><strong>${type}</strong></div>
+              <div class="meta">Protocol candidate ${candidate?.id || 'n/a'}</div>
+            </div>
+            <div class="pill ${statusClass}">${candidate?.messageIdHex || 'protocol'}</div>
+          </div>
+          <div class="meta">Vehicle: ${vehicleId} | Time: ${ts}</div>
+          <div class="meta">Parse success: ${candidate?.parseSuccess ? 'yes' : 'no'} | Source shape: ${candidate?.sourceShape || 'n/a'}</div>
+          <div class="meta" style="margin-top:4px;">Decoded: ${formatProtocolDecodeText(candidate)}</div>
+          ${batchHtml}
+          <div class="meta" style="margin-top:8px;">Nearby stored alerts:</div>
+          ${nearbyHtml}
+          <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button
+              data-protocol-use-vehicle="${vehicleId}"
+              style="width:auto; padding:6px 10px;"
+            >Use Vehicle</button>
+            <a href="/api/protocol/alert-decode-review?vehicleId=${encodeURIComponent(vehicleId)}&messageId=${encodeURIComponent(candidate?.messageIdHex || '')}&limit=20" target="_blank" rel="noopener" class="meta">Open review JSON</a>
+          </div>
+        </div>
+      `;
     }
 
     function upsertLiveAlert(alert) {
@@ -1474,6 +1564,36 @@
         || '<div class="meta">No alerts found.</div>';
     }
 
+    function renderCombinedAlerts(models, protocolCandidates) {
+      const alertHtml = models.map((m) => alertCard(m.alert, m.screenshots, m.videosInfo, { ensure: m.ensure })).join('');
+      const protocolHtml = (protocolCandidates || []).map((item) => protocolReviewCard(item)).join('');
+      alertsEl.innerHTML = alertHtml + protocolHtml || '<div class="meta">No alerts or protocol decode candidates found.</div>';
+    }
+
+    async function fetchProtocolDecodeReview(limitOverride) {
+      const limit = Math.max(10, Math.min(200, Number(limitOverride || limitEl.value || ALERT_FETCH_LIMIT_DEFAULT)));
+      const vehicleId = String(vehicleIdEl.value || '').trim();
+      const messageId = getProtocolMessageFilter();
+      const qs = new URLSearchParams();
+      qs.set('limit', String(Math.max(limit, 50)));
+      qs.set('onlyWithSignals', 'false');
+      if (vehicleId) qs.set('vehicleId', vehicleId);
+      if (messageId) qs.set('messageId', messageId);
+
+      const res = await fetch(`/api/protocol/alert-decode-review?${qs.toString()}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json().catch(() => ({}));
+      const rows = Array.isArray(body?.data) ? body.data : [];
+      return rows.filter((item) => {
+        const source = String(item?.messageIdHex || '').trim().toLowerCase();
+        const filter = String(alertSourceFilterEl?.value || 'location').trim().toLowerCase();
+        if (filter === '0200') return source === '0x0200';
+        if (filter === '0704') return source === '0x0704';
+        if (filter === 'all-real') return source === '0x0200' || source === '0x0704';
+        return source === '0x0200' || source === '0x0704';
+      });
+    }
+
     async function fetchAlertMedia(alertId, force = false) {
       const id = String(alertId || '').trim();
       if (!id) return null;
@@ -1608,6 +1728,7 @@
         }
 
         let alerts = [];
+        let protocolCandidates = [];
         try {
           const res = await fetch(`/api/alerts/active?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`, { cache: 'no-store' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1627,12 +1748,19 @@
           } catch (_) {}
         }
 
+        try {
+          protocolCandidates = await fetchProtocolDecodeReview(limit);
+          protocolDecodeReviewCache = protocolCandidates;
+        } catch (_) {
+          protocolCandidates = protocolDecodeReviewCache;
+        }
+
         mergeLiveAlertStore(alerts);
         alerts = getLiveAlerts(limit, minutes, vehicleFilter);
 
         const byAlertId = getFallbackScreenshotsByAlertId();
         const initialModels = getAlertRenderModels(alerts, byAlertId);
-        renderAlertsFromModels(initialModels);
+        renderCombinedAlerts(initialModels, protocolCandidates);
 
         const priorityAlerts = alerts.slice(0, mediaHydrateLimit);
         await hydrateAlertsMedia(priorityAlerts);
@@ -1648,7 +1776,7 @@
           }
         }
 
-        renderAlertsFromModels(hydratedModels);
+        renderCombinedAlerts(hydratedModels, protocolCandidates);
         const withAnyScreenshots = hydratedModels.filter((m) => (m.screenshots || []).length > 0).length;
         const withAnyVideos = hydratedModels.filter((m) => {
           const info = getAlertVideoInfo(m.alert, m.videosInfo);
@@ -1656,7 +1784,7 @@
         }).length;
         const nowText = new Date().toLocaleTimeString();
         const sourceLabel = alertsWsConnected ? 'source: live websocket' : 'source: api fallback';
-        summaryEl.textContent = `${alerts.length} alert(s) | with screenshots: ${withAnyScreenshots} | with video: ${withAnyVideos} | ${sourceLabel} | last update: ${nowText}${autoRequestedCount ? ` | video requests started: ${autoRequestedCount}` : ''}`;
+        summaryEl.textContent = `${alerts.length} stored alert(s) | ${protocolCandidates.length} protocol candidate(s) | with screenshots: ${withAnyScreenshots} | with video: ${withAnyVideos} | ${sourceLabel} | last update: ${nowText}${autoRequestedCount ? ` | video requests started: ${autoRequestedCount}` : ''}`;
       } catch (err) {
         setStatus(`Alert refresh error: ${err.message}`, 'err');
         const fallbackAlerts = getLiveAlerts(
@@ -1666,8 +1794,8 @@
         );
         const byAlertId = getFallbackScreenshotsByAlertId();
         const models = getAlertRenderModels(fallbackAlerts, byAlertId);
-        renderAlertsFromModels(models);
-        if (fallbackAlerts.length === 0) {
+        renderCombinedAlerts(models, protocolDecodeReviewCache);
+        if (fallbackAlerts.length === 0 && protocolDecodeReviewCache.length === 0) {
           alertsEl.innerHTML = '<div class="meta">Failed to load alerts. Check API connectivity.</div>';
         }
       } finally {
@@ -2031,6 +2159,18 @@
         });
     });
     alertsEl.addEventListener('click', (e) => {
+      const protocolBtn = e.target.closest('button[data-protocol-use-vehicle]');
+      if (protocolBtn) {
+        const vehicleId = String(protocolBtn.getAttribute('data-protocol-use-vehicle') || '').trim();
+        if (vehicleId) {
+          vehicleIdEl.value = vehicleId;
+          videoVehicleIdEl.value = vehicleId;
+          setStatus(`Using protocol candidate vehicle ${vehicleId}.`, 'ok');
+          scheduleAlertsRefresh(50);
+        }
+        return;
+      }
+
       const target = e.target.closest('button[data-request-video],button[data-open-videos],button[data-refresh-alert-video]');
       if (!target) return;
 

@@ -6,7 +6,8 @@ import {
   VendorAdditionalInfoExtension,
   LocationStatusFlags,
   ExtendedVehicleSignalStatus,
-  IoStatusFlags
+  IoStatusFlags,
+  AdditionalInfoItem
 } from '../types/jtt';
 import { getKnownVendorCodes } from '../protocol/vendorAlarmCatalog';
 
@@ -60,6 +61,15 @@ export class AlertParser {
       if (offset + 2 + infoLength > body.length) break;
       
       const infoData = body.slice(offset + 2, offset + 2 + infoLength);
+      if (!Array.isArray(alert.additionalInfoItems)) {
+        alert.additionalInfoItems = [];
+      }
+      const item: AdditionalInfoItem = {
+        infoId,
+        length: infoLength,
+        rawHex: infoData.toString('hex')
+      };
+      alert.additionalInfoItems.push(item);
       
       switch (infoId) {
         case 0x01: // Mileage
@@ -71,15 +81,51 @@ export class AlertParser {
         case 0x03: // Speed from recorder
           if (infoData.length >= 2) alert.recordedSpeed = infoData.readUInt16BE(0) / 10;
           break;
+        case 0x04: // Manual confirmation alarm event ID
+          if (infoData.length >= 2) alert.manualConfirmAlarmEventId = infoData.readUInt16BE(0);
+          break;
         case 0x11: // Overspeed alarm additional information
+          if (infoData.length >= 1) {
+            const locationType = infoData.readUInt8(0);
+            alert.overspeedAdditionalInfo = {
+              locationType,
+              areaOrRouteId: infoData.length >= 5 && locationType !== 0
+                ? infoData.readUInt32BE(1)
+                : undefined
+            };
+          }
+          break;
         case 0x12: // In/out area/route additional information
+          if (infoData.length >= 6) {
+            alert.areaRouteAdditionalInfo = {
+              locationType: infoData.readUInt8(0),
+              areaOrRouteId: infoData.readUInt32BE(1),
+              direction: (infoData.readUInt8(5) ? 1 : 0) as 0 | 1
+            };
+          }
+          break;
         case 0x13: // Travel time alarm additional information
+          if (infoData.length >= 7) {
+            alert.routeTravelTimeAdditionalInfo = {
+              routeId: infoData.readUInt32BE(0),
+              travelTimeSeconds: infoData.readUInt16BE(4),
+              result: (infoData.readUInt8(6) ? 1 : 0) as 0 | 1
+            };
+          }
           break;
         case 0x25: // Extended vehicle signal status
           alert.extendedVehicleSignals = this.parseExtendedVehicleSignalStatus(infoData);
           break;
         case 0x2A: // IO status bit
           alert.ioStatus = this.parseIoStatus(infoData);
+          break;
+        case 0x2B: // Analog values AD0/AD1
+          if (infoData.length >= 4) {
+            alert.analogSignals = {
+              ad0: infoData.readUInt16BE(0),
+              ad1: infoData.readUInt16BE(2)
+            };
+          }
           break;
         case 0x30: // Wireless communication signal strength
           if (infoData.length >= 1) alert.wirelessSignalStrength = infoData.readUInt8(0);
@@ -187,12 +233,36 @@ export class AlertParser {
       overspeed: !!(alarmFlag & (1 << 1)),
       fatigue: !!(alarmFlag & (1 << 2)),
       dangerousDriving: !!(alarmFlag & (1 << 3)),
+      gnssModuleFailure: !!(alarmFlag & (1 << 4)),
+      gnssAntennaDisconnected: !!(alarmFlag & (1 << 5)),
+      gnssAntennaShortCircuit: !!(alarmFlag & (1 << 6)),
+      terminalPowerUndervoltage: !!(alarmFlag & (1 << 7)),
+      terminalPowerFailure: !!(alarmFlag & (1 << 8)),
+      terminalDisplayFailure: !!(alarmFlag & (1 << 9)),
+      ttsModuleFailure: !!(alarmFlag & (1 << 10)),
+      cameraFailure: !!(alarmFlag & (1 << 11)),
+      transportIcCardModuleFailure: !!(alarmFlag & (1 << 12)),
       overspeedWarning: !!(alarmFlag & (1 << 13)),
       fatigueWarning: !!(alarmFlag & (1 << 14)),
+      vibrationAlarm: !!(alarmFlag & (1 << 15)),
+      lightAlarm: !!(alarmFlag & (1 << 16)),
+      magneticInductiveAlarm: !!(alarmFlag & (1 << 17)),
+      accumulatedDrivingTimeAlarm: !!(alarmFlag & (1 << 18)),
+      overtimeParking: !!(alarmFlag & (1 << 19)),
+      areaEntryExitAlarm: !!(alarmFlag & (1 << 20)),
+      routeEntryExitAlarm: !!(alarmFlag & (1 << 21)),
+      routeTravelTimeAlarm: !!(alarmFlag & (1 << 22)),
+      routeDeviationAlarm: !!(alarmFlag & (1 << 23)),
+      vssFailure: !!(alarmFlag & (1 << 24)),
+      abnormalFuelCapacity: !!(alarmFlag & (1 << 25)),
+      vehicleTheft: !!(alarmFlag & (1 << 26)),
+      illegalIgnition: !!(alarmFlag & (1 << 27)),
+      illegalDisplacement: !!(alarmFlag & (1 << 28)),
       // JT/T 808 Table 24: collision warning is bit29 (bit31 is illegal door open)
       collisionWarning: !!(alarmFlag & (1 << 29)),
       // JT/T 808 Table 24: rollover warning is bit30
-      rolloverWarning: !!(alarmFlag & (1 << 30))
+      rolloverWarning: !!(alarmFlag & (1 << 30)),
+      illegalDoorOpenAlarm: !!(alarmFlag & (1 << 31))
     };
   }
 

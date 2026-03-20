@@ -20,21 +20,34 @@ export class JTT808Parser {
       const bodyProps = unescaped.readUInt16BE(2);
       const bodyLength = bodyProps & 0x3FF; // Lower 10 bits
       const isSubpackage = (bodyProps & 0x2000) !== 0;
-      
-      // Terminal phone (BCD, 6 bytes)
-      const phoneBytes = unescaped.slice(4, 10);
-      const terminalPhone = this.bcdToString(phoneBytes);
-      
-      const serialNumber = unescaped.readUInt16BE(10);
+      const versionFlag = (bodyProps & 0x4000) !== 0;
+
+      let protocolVersion: number | undefined;
+      let phoneOffset = 4;
+      let phoneLength = 6;
+      let serialOffset = 10;
       let headerLength = 12;
+
+      if (versionFlag) {
+        if (unescaped.length < 17) return null;
+        protocolVersion = unescaped.readUInt8(4);
+        phoneOffset = 5;
+        phoneLength = 10;
+        serialOffset = 15;
+        headerLength = 17;
+      }
+
+      const phoneBytes = unescaped.slice(phoneOffset, phoneOffset + phoneLength);
+      const terminalPhone = this.bcdToString(phoneBytes);
+      const serialNumber = unescaped.readUInt16BE(serialOffset);
       let packetCount: number | undefined;
       let packetIndex: number | undefined;
 
       if (isSubpackage) {
-        if (unescaped.length < 16) return null;
-        packetCount = unescaped.readUInt16BE(12);
-        packetIndex = unescaped.readUInt16BE(14);
-        headerLength = 16;
+        if (unescaped.length < headerLength + 4) return null;
+        packetCount = unescaped.readUInt16BE(headerLength);
+        packetIndex = unescaped.readUInt16BE(headerLength + 2);
+        headerLength += 4;
       }
 
       const expectedMinLength = headerLength + bodyLength + 1; // + checksum
@@ -61,6 +74,8 @@ export class JTT808Parser {
         bodyLength,
         terminalPhone,
         serialNumber,
+        protocolVersion,
+        versionFlag,
         isSubpackage,
         packetCount,
         packetIndex,
@@ -145,7 +160,7 @@ export class JTT808Parser {
   }
 
   private static bcdToString(buffer: Buffer): string {
-    return buffer.toString('hex').replace(/^0+/, '') || '0';
+    return buffer.toString('hex');
   }
 
   private static stringToBcd(str: string): Buffer {
