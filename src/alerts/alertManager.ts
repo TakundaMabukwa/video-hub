@@ -452,6 +452,11 @@ export class AlertManager extends EventEmitter {
   }
 
   private async captureEventVideo(alert: AlertEvent): Promise<void> {
+    const localBufferCaptureEnabled = String(process.env.LOCAL_BUFFER_CAPTURE_ENABLED ?? 'true').toLowerCase() !== 'false';
+    if (!localBufferCaptureEnabled) {
+      return;
+    }
+
     const key = `${alert.vehicleId}_${alert.channel}`;
     const buffer = this.videoBuffers.get(key);
 

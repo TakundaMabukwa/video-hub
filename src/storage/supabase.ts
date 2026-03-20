@@ -1,42 +1,58 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
 
-// Load environment variables first
 dotenv.config();
 
-const supabaseUrl = process.env.SUPABASE_URL!;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+let supabaseClient: SupabaseClient | null = null;
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+export function hasSupabaseStorage(): boolean {
+  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+}
 
-// Initialize bucket
-export async function ensureBucket() {
+export function getSupabase(): SupabaseClient {
+  if (!hasSupabaseStorage()) {
+    throw new Error('Supabase storage is not configured.');
+  }
+
+  if (!supabaseClient) {
+    supabaseClient = createClient(
+      String(process.env.SUPABASE_URL),
+      String(process.env.SUPABASE_SERVICE_ROLE_KEY)
+    );
+  }
+
+  return supabaseClient;
+}
+
+export async function ensureBucket(): Promise<string> {
+  if (!hasSupabaseStorage()) {
+    return 'jtt1078-media';
+  }
+
   try {
+    const supabase = getSupabase();
     const { data: buckets } = await supabase.storage.listBuckets();
-    
-    // Check if any bucket exists, use first one found
+
     if (buckets && buckets.length > 0) {
-      console.log(`✅ Using existing bucket: ${buckets[0].name}`);
+      console.log(`Using existing bucket: ${buckets[0].name}`);
       return buckets[0].name;
     }
-    
-    // No buckets exist, create new one
+
     const bucketName = 'jtt1078-media';
     const { error } = await supabase.storage.createBucket(bucketName, {
       public: true,
-      fileSizeLimit: 52428800 // 50MB (reduced from 500MB)
+      fileSizeLimit: 52428800
     });
-    
+
     if (error) {
-      console.warn('⚠️ Bucket creation warning:', error.message);
-      // Don't throw - bucket might already exist
+      console.warn('Supabase bucket creation warning:', error.message);
       return bucketName;
     }
-    
-    console.log(`✅ Created Supabase bucket: ${bucketName}`);
+
+    console.log(`Created Supabase bucket: ${bucketName}`);
     return bucketName;
   } catch (error) {
-    console.warn('⚠️ Supabase bucket initialization skipped:', error);
-    return 'jtt1078-media'; // Return default bucket name
+    console.warn('Supabase bucket initialization skipped:', error);
+    return 'jtt1078-media';
   }
 }

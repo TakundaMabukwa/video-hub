@@ -18,6 +18,7 @@ export class UDPRTPServer {
   private alertManager?: AlertManager;
   private onFrameCallback?: (vehicleId: string, channel: number, frame: Buffer, isIFrame: boolean) => void;
   private vehicleIdResolver?: (ipAddress: string) => string;
+  private packetForwarder?: (packet: Buffer, vehicleId: string, transport: 'udp') => void;
 
   constructor(private port: number) {
     this.server = dgram.createSocket('udp4');
@@ -33,6 +34,10 @@ export class UDPRTPServer {
 
   setVehicleIdResolver(resolver: (ipAddress: string) => string): void {
     this.vehicleIdResolver = resolver;
+  }
+
+  setPacketForwarder(callback: (packet: Buffer, vehicleId: string, transport: 'udp') => void): void {
+    this.packetForwarder = callback;
   }
 
   start(): Promise<void> {
@@ -72,6 +77,11 @@ export class UDPRTPServer {
     const vehicleIp = String(rinfo.address || '').replace('::ffff:', '');
     const vehicleId = this.vehicleIdResolver?.(vehicleIp) || vehicleIp;
     const streamKey = `${vehicleId}_${header.channelNumber}`;
+
+    if (this.packetForwarder) {
+      this.packetForwarder(buffer, vehicleId, 'udp');
+      return;
+    }
 
     // Transparent data packets can carry vendor ADAS/DMS alarms.
     // Do not route them through HLS/video frame assembly.

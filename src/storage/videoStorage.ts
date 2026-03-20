@@ -1,5 +1,5 @@
 import { query } from './database';
-import { supabase, ensureBucket } from './supabase';
+import { ensureBucket, getSupabase, hasSupabaseStorage } from './supabase';
 import * as fs from 'fs';
 
 export class VideoStorage {
@@ -34,7 +34,6 @@ export class VideoStorage {
     alertId?: string,
     frameCount?: number
   ) {
-    // Prevent FK violations on videos.device_id -> devices.device_id.
     await this.ensureDeviceExists(deviceId);
 
     const result = await query(
@@ -63,16 +62,20 @@ export class VideoStorage {
   }
 
   async uploadVideoToSupabase(id: string, localPath: string, deviceId: string, channel: number): Promise<string> {
-    const bucketName = await this.bucketReady;
+    if (!hasSupabaseStorage()) {
+      return localPath;
+    }
 
-    // Check file size before reading
+    const bucketName = await this.bucketReady;
+    const supabase = getSupabase();
+
     const stats = fs.statSync(localPath);
-    const maxSize = 150 * 1024 * 1024; // 150MB Supabase limit
+    const maxSize = 150 * 1024 * 1024;
 
     if (stats.size > maxSize) {
-      console.warn(`⚠️ Video too large for Supabase: ${(stats.size / 1024 / 1024).toFixed(2)}MB (max 150MB). Skipping upload.`);
-      console.log(`📁 Video stored locally only: ${localPath}`);
-      return localPath; // Return local path instead
+      console.warn(`Video too large for Supabase: ${(stats.size / 1024 / 1024).toFixed(2)}MB (max 150MB). Skipping upload.`);
+      console.log(`Video stored locally only: ${localPath}`);
+      return localPath;
     }
 
     const videoData = fs.readFileSync(localPath);
@@ -81,7 +84,7 @@ export class VideoStorage {
     const filename = `${deviceId}/ch${channel}/${timestamp}.${ext}`;
     const contentType = ext === 'mp4' ? 'video/mp4' : 'video/h264';
 
-    const { data, error } = await supabase.storage
+    const { error } = await supabase.storage
       .from(bucketName)
       .upload(filename, videoData, {
         contentType,
@@ -90,8 +93,8 @@ export class VideoStorage {
 
     if (error) {
       console.error('Supabase video upload failed:', error);
-      console.log(`📁 Video stored locally only: ${localPath}`);
-      return localPath; // Fallback to local path
+      console.log(`Video stored locally only: ${localPath}`);
+      return localPath;
     }
 
     const { data: urlData } = supabase.storage
@@ -100,12 +103,11 @@ export class VideoStorage {
 
     const storageUrl = urlData.publicUrl;
 
-    // Update database with storage URL
     await query(
       `UPDATE videos SET storage_url = $1 WHERE id = $2`,
       [storageUrl, id]
     );
-    
+
     const deleteLocalAfterUpload = String(process.env.DELETE_LOCAL_VIDEO_AFTER_UPLOAD ?? 'true').toLowerCase() !== 'false';
     if (deleteLocalAfterUpload) {
       try {
@@ -117,7 +119,7 @@ export class VideoStorage {
       }
     }
 
-    console.log(`📹 Video uploaded to Supabase: ${storageUrl}`);
+    console.log(`Video uploaded to Supabase: ${storageUrl}`);
     return storageUrl;
   }
 

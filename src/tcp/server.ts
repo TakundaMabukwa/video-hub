@@ -135,6 +135,9 @@ export class JTT808Server {
   private pendingScreenshotRequests = new Map<string, PendingScreenshotRequest[]>();
   private vehicleIdentityById = new Map<string, VehicleIdentity>();
   private messageTraceCallback?: (trace: MessageTraceEntry) => void;
+  private boundAlertManagerForCommands?: AlertManager;
+  private boundRequestScreenshotHandler?: (payload: any) => void;
+  private boundRequestCameraVideoHandler?: (payload: any) => void;
   private readonly vendorDecoderVersion = 'vendor-catalog-v1';
   private vendorAlertTelemetry = {
     emittedBySourceCode: new Map<string, number>(),
@@ -155,9 +158,22 @@ export class JTT808Server {
   constructor(private port: number, private udpPort: number) {
     this.server = net.createServer(this.handleConnection.bind(this));
     this.alertManager = new AlertManager();
-    
-    // Listen for screenshot requests from alert manager
-    this.alertManager.on('request-screenshot', ({ vehicleId, channel, alertId }) => {
+  }
+
+  getAlertManager(): AlertManager {
+    return this.alertManager;
+  }
+
+  setAlertManager(alertManager: AlertManager): void {
+    this.detachAlertCommandBridge();
+    this.alertManager = alertManager;
+  }
+
+  attachAlertCommandBridge(alertManager: AlertManager = this.alertManager): void {
+    this.detachAlertCommandBridge();
+
+    this.boundAlertManagerForCommands = alertManager;
+    this.boundRequestScreenshotHandler = ({ vehicleId, channel, alertId }) => {
       const channels = this.resolveAlertCaptureChannels(vehicleId, channel);
       for (const ch of channels) {
         console.log(`Alert ${alertId}: Requesting screenshot from ${vehicleId} channel ${ch}`);
@@ -169,10 +185,8 @@ export class JTT808Server {
           videoDurationSec: 8
         });
       }
-    });
-    
-    // Listen for camera video requests from alert manager
-    this.alertManager.on('request-camera-video', ({ vehicleId, channel, startTime, endTime, alertId }) => {
+    };
+    this.boundRequestCameraVideoHandler = ({ vehicleId, channel, startTime, endTime, alertId }) => {
       const channels = this.resolveAlertCaptureChannels(vehicleId, channel);
       for (const ch of channels) {
         console.log(`Alert ${alertId}: Requesting camera SD card video from ${vehicleId} channel ${ch}`);
@@ -181,12 +195,22 @@ export class JTT808Server {
           requestDownload: false
         });
       }
-    });
+    };
 
+    alertManager.on('request-screenshot', this.boundRequestScreenshotHandler);
+    alertManager.on('request-camera-video', this.boundRequestCameraVideoHandler);
   }
 
-  getAlertManager(): AlertManager {
-    return this.alertManager;
+  private detachAlertCommandBridge(): void {
+    if (this.boundAlertManagerForCommands && this.boundRequestScreenshotHandler) {
+      this.boundAlertManagerForCommands.off('request-screenshot', this.boundRequestScreenshotHandler);
+    }
+    if (this.boundAlertManagerForCommands && this.boundRequestCameraVideoHandler) {
+      this.boundAlertManagerForCommands.off('request-camera-video', this.boundRequestCameraVideoHandler);
+    }
+    this.boundAlertManagerForCommands = undefined;
+    this.boundRequestScreenshotHandler = undefined;
+    this.boundRequestCameraVideoHandler = undefined;
   }
 
   private shouldLogNoisy(key: string, throttleMs: number = 10000): boolean {
