@@ -4,6 +4,9 @@ import * as dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 
+export const isDatabaseEnabled = (): boolean =>
+  String(process.env.DB_ENABLED ?? 'true').toLowerCase() !== 'false';
+
 // ========== CONNECTION POOL CONFIGURATION ==========
 // OPTIMIZED FOR: PostgreSQL max_connections = 300 + shared_buffers = 4GB + 16GB RAM
 // NOTE: Queries are taking 40+ seconds - increased timeouts accordingly

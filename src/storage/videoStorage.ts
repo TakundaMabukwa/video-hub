@@ -1,15 +1,19 @@
 import { query } from './database';
 import { ensureBucket, getSupabase, hasSupabaseStorage } from './supabase';
 import * as fs from 'fs';
+import { isDatabaseEnabled } from './database';
 
 export class VideoStorage {
   private bucketReady: Promise<string>;
+  private readonly dbEnabled: boolean;
 
   constructor() {
+    this.dbEnabled = isDatabaseEnabled();
     this.bucketReady = ensureBucket();
   }
 
   private async ensureDeviceExists(deviceId: string): Promise<void> {
+    if (!this.dbEnabled) return;
     if (!deviceId) return;
 
     const looksLikeIp = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(deviceId);
@@ -34,6 +38,10 @@ export class VideoStorage {
     alertId?: string,
     frameCount?: number
   ) {
+    if (!this.dbEnabled) {
+      return `local-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+
     await this.ensureDeviceExists(deviceId);
 
     const result = await query(
@@ -46,6 +54,7 @@ export class VideoStorage {
   }
 
   async updateVideoProgress(id: string, endTime: Date, fileSize: number, duration: number, frameCount?: number) {
+    if (!this.dbEnabled) return;
     await query(
       `UPDATE videos
        SET end_time = $1,
@@ -103,10 +112,12 @@ export class VideoStorage {
 
     const storageUrl = urlData.publicUrl;
 
-    await query(
-      `UPDATE videos SET storage_url = $1 WHERE id = $2`,
-      [storageUrl, id]
-    );
+    if (this.dbEnabled) {
+      await query(
+        `UPDATE videos SET storage_url = $1 WHERE id = $2`,
+        [storageUrl, id]
+      );
+    }
 
     const deleteLocalAfterUpload = String(process.env.DELETE_LOCAL_VIDEO_AFTER_UPLOAD ?? 'true').toLowerCase() !== 'false';
     if (deleteLocalAfterUpload) {
@@ -124,6 +135,7 @@ export class VideoStorage {
   }
 
   async getVideos(deviceId: string, limit: number = 50) {
+    if (!this.dbEnabled) return [];
     const result = await query(
       `SELECT * FROM videos WHERE device_id = $1 ORDER BY start_time DESC LIMIT $2`,
       [deviceId, limit]
@@ -132,6 +144,7 @@ export class VideoStorage {
   }
 
   async getAlertVideos(alertId: string) {
+    if (!this.dbEnabled) return [];
     const result = await query(
       `SELECT * FROM videos WHERE alert_id = $1 ORDER BY video_type`,
       [alertId]

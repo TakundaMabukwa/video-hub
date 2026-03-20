@@ -156,7 +156,8 @@ const BACKGROUND_STREAM_INTERVAL_MS = parseInt(process.env.BACKGROUND_STREAM_INT
 const INGRESS_ENABLED = envFlag('INGRESS_ENABLED', true);
 const ALERT_PROCESSING_ENABLED = envFlag('ALERT_PROCESSING_ENABLED', true);
 const VIDEO_PROCESSING_ENABLED = envFlag('VIDEO_PROCESSING_ENABLED', true);
-const SHOULD_USE_DB = ALERT_PROCESSING_ENABLED || VIDEO_PROCESSING_ENABLED;
+const DB_ENABLED = envFlag('DB_ENABLED', ALERT_PROCESSING_ENABLED);
+const SHOULD_USE_DB = DB_ENABLED;
 const ALERT_WORKER_URL = process.env.ALERT_WORKER_URL || '';
 const VIDEO_WORKER_URL = process.env.VIDEO_WORKER_URL || '';
 const LISTENER_SERVER_URL = process.env.LISTENER_SERVER_URL || '';
@@ -303,7 +304,7 @@ async function startServer() {
     await tcpServer.start();
     await udpServer.start();
   }
-  if (VIDEO_PROCESSING_ENABLED) {
+  if (VIDEO_PROCESSING_ENABLED && SHOULD_USE_DB) {
     retentionService.start();
   }
 
@@ -523,30 +524,32 @@ async function startServer() {
   }
   
   // Alert reminder scheduler - Check for unattended alerts every 5 minutes
-  setInterval(async () => {
-    try {
-      const { AlertStorageDB } = require('./storage/alertStorageDB');
-      const alertStorage = new AlertStorageDB();
-      const unattended = await alertStorage.getUnattendedAlerts(30);
-      
-      if (unattended.length > 0) {
-        console.log(`⏰ REMINDER: ${unattended.length} unattended alerts`);
-        wsServer.broadcast({
-          type: 'alert-reminder',
-          count: unattended.length,
-          alerts: unattended.map((a: any) => ({
-            id: a.id,
-            type: a.alert_type,
-            priority: a.priority,
-            timestamp: a.timestamp,
-            vehicleId: a.device_id
-          }))
-        });
+  if (ALERT_PROCESSING_ENABLED && SHOULD_USE_DB) {
+    setInterval(async () => {
+      try {
+        const { AlertStorageDB } = require('./storage/alertStorageDB');
+        const alertStorage = new AlertStorageDB();
+        const unattended = await alertStorage.getUnattendedAlerts(30);
+        
+        if (unattended.length > 0) {
+          console.log(`⏰ REMINDER: ${unattended.length} unattended alerts`);
+          wsServer.broadcast({
+            type: 'alert-reminder',
+            count: unattended.length,
+            alerts: unattended.map((a: any) => ({
+              id: a.id,
+              type: a.alert_type,
+              priority: a.priority,
+              timestamp: a.timestamp,
+              vehicleId: a.device_id
+            }))
+          });
+        }
+      } catch (error) {
+        console.error('Alert reminder error:', error);
       }
-    } catch (error) {
-      console.error('Alert reminder error:', error);
-    }
-  }, 5 * 60 * 1000); // Every 5 minutes
+    }, 5 * 60 * 1000); // Every 5 minutes
+  }
   
   httpServer.listen(API_PORT, '0.0.0.0', () => {
     console.log(`REST API server listening on port ${API_PORT}`);
