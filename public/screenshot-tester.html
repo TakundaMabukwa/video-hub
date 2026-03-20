@@ -255,6 +255,17 @@
         <button id="toggleAutoCaptureBtn" class="primary">Start 30s Auto Capture</button>
       </div>
 
+      <div class="row" style="margin-top:12px; grid-template-columns: 2fr auto;">
+        <div>
+          <label for="alertApiBase">Alert Server Base URL</label>
+          <input id="alertApiBase" placeholder="e.g. http://46.101.219.78:3100" />
+        </div>
+        <div>
+          <label for="saveAlertApiBtn">Action</label>
+          <button id="saveAlertApiBtn">Use Alert Server</button>
+        </div>
+      </div>
+
       <div class="row" style="margin-top:12px; grid-template-columns: 1fr 1fr;">
         <div>
           <label for="alertSourceFilter">Alert Source Filter</label>
@@ -459,6 +470,7 @@
     const simulateChannelEl = document.getElementById('simulateChannel');
     const alertSourceFilterEl = document.getElementById('alertSourceFilter');
     const alertTypeFilterEl = document.getElementById('alertTypeFilter');
+    const alertApiBaseEl = document.getElementById('alertApiBase');
 
     let autoRefresh = true;
     let refreshTimer = null;
@@ -490,6 +502,43 @@
     const ALERT_VIDEO_RETRY_MS = 60000;
     const ALERT_SCREENSHOT_RETRY_MS = 30000;
     const MIN_READY_SECONDS = 3;
+    const ALERT_API_BASE_STORAGE_KEY = 'screenshot_tester_alert_api_base';
+
+    function normalizeBaseUrl(value) {
+      return String(value || '').trim().replace(/\/+$/, '');
+    }
+
+    function getAlertApiBase() {
+      return normalizeBaseUrl(alertApiBaseEl?.value || localStorage.getItem(ALERT_API_BASE_STORAGE_KEY) || '');
+    }
+
+    function alertApiUrl(path) {
+      const base = getAlertApiBase();
+      return `${base || ''}${path}`;
+    }
+
+    function alertWsUrl() {
+      const base = getAlertApiBase();
+      if (!base) {
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return `${protocol}//${location.host}/ws/alerts`;
+      }
+      const wsBase = base.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+      return `${wsBase}/ws/alerts`;
+    }
+
+    function saveAlertApiBase() {
+      const base = normalizeBaseUrl(alertApiBaseEl?.value || '');
+      if (base) {
+        localStorage.setItem(ALERT_API_BASE_STORAGE_KEY, base);
+        setStatus(`Alert server set to ${base}`, 'ok');
+      } else {
+        localStorage.removeItem(ALERT_API_BASE_STORAGE_KEY);
+        setStatus('Alert server cleared. Using same-origin alert APIs.', 'ok');
+      }
+      scheduleAlertsRefresh(50);
+      connectWebSocket(true);
+    }
 
     function normalizeAlertRecord(alert) {
       if (!alert || typeof alert !== 'object') return null;
@@ -792,9 +841,9 @@
       const postReady = !!(videosInfo?.has_post_event || (postPath && postDuration >= MIN_READY_SECONDS));
       const cameraReady = !!(videosInfo?.has_camera_video || cameraPath);
 
-      const preUrl = `/api/alerts/${encodeURIComponent(alertId)}/video/pre`;
-      const postUrl = `/api/alerts/${encodeURIComponent(alertId)}/video/post`;
-      const cameraUrl = `/api/alerts/${encodeURIComponent(alertId)}/video/camera`;
+      const preUrl = alertApiUrl(`/api/alerts/${encodeURIComponent(alertId)}/video/pre`);
+      const postUrl = alertApiUrl(`/api/alerts/${encodeURIComponent(alertId)}/video/post`);
+      const cameraUrl = alertApiUrl(`/api/alerts/${encodeURIComponent(alertId)}/video/camera`);
 
       return {
         preReady,
@@ -923,7 +972,7 @@
           <div class="meta" style="margin-top:4px;">Decoded: ${decodeText}</div>
           ${stateHtml}
           <div class="meta" style="margin-top:8px;">
-            <a href="/api/alerts/${encodeURIComponent(String(alert.id))}/media?ensureMedia=true" target="_blank" rel="noopener">Open alert media JSON</a>
+            <a href="${alertApiUrl(`/api/alerts/${encodeURIComponent(String(alert.id))}/media?ensureMedia=true`)}" target="_blank" rel="noopener">Open alert media JSON</a>
           </div>
         </div>
       `;
@@ -932,7 +981,7 @@
     async function requestAlertReportVideo(alertId) {
       try {
         setStatus(`Requesting camera report video for alert ${alertId}...`);
-        const res = await fetch(`/api/alerts/${encodeURIComponent(alertId)}/request-report-video`, {
+        const res = await fetch(alertApiUrl(`/api/alerts/${encodeURIComponent(alertId)}/request-report-video`), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1056,7 +1105,7 @@
       });
 
       try {
-        const res = await fetch(`/api/alerts/${encodeURIComponent(alertId)}/collect-evidence`, {
+        const res = await fetch(alertApiUrl(`/api/alerts/${encodeURIComponent(alertId)}/collect-evidence`), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1113,7 +1162,7 @@
       });
 
       try {
-        const res = await fetch(`/api/alerts/${encodeURIComponent(alertId)}/collect-evidence`, {
+        const res = await fetch(alertApiUrl(`/api/alerts/${encodeURIComponent(alertId)}/collect-evidence`), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1616,7 +1665,7 @@
 
         let ensure = cached?.ensure || null;
         try {
-          const res = await fetch(`/api/alerts/${encodeURIComponent(id)}/media?ensureMedia=true`, { cache: 'no-store' });
+          const res = await fetch(alertApiUrl(`/api/alerts/${encodeURIComponent(id)}/media?ensureMedia=true`), { cache: 'no-store' });
           const body = await res.json().catch(() => ({}));
           if (!res.ok || !body?.success) {
             error = body?.message || `media:${res.status}`;
@@ -1730,7 +1779,7 @@
         let alerts = [];
         let protocolCandidates = [];
         try {
-          const res = await fetch(`/api/alerts/active?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`, { cache: 'no-store' });
+          const res = await fetch(alertApiUrl(`/api/alerts/active?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`), { cache: 'no-store' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json().catch(() => ({}));
           alerts = Array.isArray(data.alerts) ? data.alerts.filter((a) => matchesSourceFilter(a) && matchesAlertTypeFilter(a)) : [];
@@ -1740,7 +1789,7 @@
 
         if (alerts.length === 0) {
           try {
-            const res = await fetch(`/api/alerts?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`, { cache: 'no-store' });
+            const res = await fetch(alertApiUrl(`/api/alerts?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`), { cache: 'no-store' });
             if (res.ok) {
               const data = await res.json().catch(() => ({}));
               alerts = Array.isArray(data.alerts) ? data.alerts.filter((a) => matchesSourceFilter(a) && matchesAlertTypeFilter(a)) : [];
@@ -1956,7 +2005,7 @@
     async function checkForNewAlerts() {
       if (alertsWsConnected) return;
       try {
-        const res = await fetch('/api/alerts/active');
+        const res = await fetch(alertApiUrl('/api/alerts/active'));
         if (!res.ok) return;
         const data = await res.json();
         mergeLiveAlertStore(Array.isArray(data?.alerts) ? data.alerts : []);
@@ -1989,13 +2038,22 @@
       }, 30000);
     }
 
-    function connectWebSocket() {
-      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${protocol}//${location.host}/ws/alerts`);
+    let currentAlertsWs = null;
+    function connectWebSocket(forceReconnect = false) {
+      if (forceReconnect && currentAlertsWs) {
+        try { currentAlertsWs.close(); } catch (_) {}
+        currentAlertsWs = null;
+      }
+      if (currentAlertsWs && (currentAlertsWs.readyState === WebSocket.OPEN || currentAlertsWs.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+
+      const ws = new WebSocket(alertWsUrl());
+      currentAlertsWs = ws;
 
       ws.onopen = () => {
         alertsWsConnected = true;
-        wsStatusEl.textContent = 'WebSocket: connected';
+        wsStatusEl.textContent = `WebSocket: connected${getAlertApiBase() ? ` (${getAlertApiBase()})` : ''}`;
       };
       ws.onclose = () => {
         alertsWsConnected = false;
@@ -2188,10 +2246,12 @@
 
       const openId = target.getAttribute('data-open-videos');
       if (openId) {
-        window.open(`/api/alerts/${encodeURIComponent(openId)}/videos`, '_blank');
+        window.open(alertApiUrl(`/api/alerts/${encodeURIComponent(openId)}/videos`), '_blank');
       }
     });
+    document.getElementById('saveAlertApiBtn').addEventListener('click', saveAlertApiBase);
 
+    alertApiBaseEl.value = normalizeBaseUrl(localStorage.getItem(ALERT_API_BASE_STORAGE_KEY) || '');
     loadVehicles();
     setDefaultVideoWindow();
     refreshVideoJobs();
