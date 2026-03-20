@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { spawn } from 'child_process';
 import { JTT808Parser } from './parser';
+import { JTT1078RTPParser } from '../udp/rtpParser';
 import { JTT1078Commands } from './commands';
 import { ScreenshotCommands } from './screenshotCommands';
 import { AlertParser } from './alertParser';
@@ -506,9 +507,17 @@ export class JTT808Server {
   }
 
   private handleRTPData(buffer: Buffer, socket: net.Socket): void {
-    // Use IP address as vehicle ID (cameras use multiple sockets)
     const clientIp = socket.remoteAddress?.replace('::ffff:', '') || '';
-    const vehicleId = this.ipToVehicle.get(clientIp) || clientIp; // Fallback to IP if not registered
+    let vehicleId = this.ipToVehicle.get(clientIp) || clientIp;
+
+    const parsedRtp = JTT1078RTPParser.parseRTPPacket(buffer);
+    const parsedSim = String(parsedRtp?.header?.simCard || '').trim();
+    if (parsedSim) {
+      vehicleId = parsedSim;
+      if (clientIp) {
+        this.ipToVehicle.set(clientIp, parsedSim);
+      }
+    }
     
     if (this.rtpHandler) {
       this.rtpHandler(buffer, vehicleId);
