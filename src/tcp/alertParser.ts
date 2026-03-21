@@ -113,6 +113,21 @@ export class AlertParser {
             };
           }
           break;
+        case 0x14: // JT/T 1078 video-related alarm status bits
+          alert.videoAlarms = this.parseVideoAlarms(infoData);
+          break;
+        case 0x15: // JT/T 1078 video signal loss channels
+          alert.signalLossChannels = this.parseChannelBits(infoData);
+          break;
+        case 0x16: // JT/T 1078 video signal blocking channels
+          alert.blockingChannels = this.parseChannelBits(infoData);
+          break;
+        case 0x17: // JT/T 1078 storage/memory failure status
+          alert.memoryFailures = this.parseMemoryFailures(infoData);
+          break;
+        case 0x18: // JT/T 1078 abnormal driving behavior details
+          alert.drivingBehavior = this.parseAbnormalDriving(infoData);
+          break;
         case 0x25: // Extended vehicle signal status
           alert.extendedVehicleSignals = this.parseExtendedVehicleSignalStatus(infoData);
           break;
@@ -181,6 +196,8 @@ export class AlertParser {
   private static parseMemoryFailures(data: Buffer): { main: number[]; backup: number[]; } {
     if (data.length < 2) return { main: [], backup: [] };
     
+    // Spec defines WORD (2 bytes). Some terminals pad this item to 4 bytes;
+    // decode the leading WORD and ignore trailing padding.
     const bits = data.readUInt16BE(0);
     const main: number[] = [];
     const backup: number[] = [];
