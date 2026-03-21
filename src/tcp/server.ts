@@ -3036,7 +3036,6 @@ export class JTT808Server {
   }
 
   private pushMessageTrace(message: any, rawFrame?: Buffer, parse?: Record<string, unknown>): void {
-    if (!this.messageTraceEnabled) return;
     const trace: MessageTraceEntry = {
       id: ++this.messageTraceSeq,
       receivedAt: new Date().toISOString(),
@@ -3055,13 +3054,6 @@ export class JTT808Server {
       parse: parse || undefined
     };
 
-    this.recentMessageTraces.push(trace);
-    if (this.recentMessageTraces.length > this.maxMessageTraceBuffer) {
-      const overflow = this.recentMessageTraces.length - this.maxMessageTraceBuffer;
-      this.recentMessageTraces.splice(0, overflow);
-    }
-
-    RawIngestLogger.write('jt808_message_trace', trace as unknown as Record<string, unknown>);
     ProtocolMessageArchive.write({
       ts: trace.receivedAt,
       direction: trace.direction || 'inbound',
@@ -3079,6 +3071,17 @@ export class JTT808Server {
       bodyTextPreview: trace.bodyTextPreview,
       parse: trace.parse
     });
+    if (!this.messageTraceEnabled) {
+      return;
+    }
+
+    this.recentMessageTraces.push(trace);
+    if (this.recentMessageTraces.length > this.maxMessageTraceBuffer) {
+      const overflow = this.recentMessageTraces.length - this.maxMessageTraceBuffer;
+      this.recentMessageTraces.splice(0, overflow);
+    }
+
+    RawIngestLogger.write('jt808_message_trace', trace as unknown as Record<string, unknown>);
     void this.protocolMessageStorage.save(trace).catch((error) => {
       console.error('Failed to persist inbound protocol message trace:', error);
     });
@@ -3097,7 +3100,6 @@ export class JTT808Server {
     body: Buffer,
     parse?: Record<string, unknown>
   ): void {
-    if (!this.messageTraceEnabled) return;
     const trace: MessageTraceEntry = {
       id: ++this.messageTraceSeq,
       receivedAt: new Date().toISOString(),
@@ -3114,13 +3116,6 @@ export class JTT808Server {
       parse: parse || undefined
     };
 
-    this.recentMessageTraces.push(trace);
-    if (this.recentMessageTraces.length > this.maxMessageTraceBuffer) {
-      const overflow = this.recentMessageTraces.length - this.maxMessageTraceBuffer;
-      this.recentMessageTraces.splice(0, overflow);
-    }
-
-    RawIngestLogger.write('jt808_message_trace', trace as unknown as Record<string, unknown>);
     ProtocolMessageArchive.write({
       ts: trace.receivedAt,
       direction: trace.direction || 'outbound',
@@ -3138,6 +3133,17 @@ export class JTT808Server {
       bodyTextPreview: trace.bodyTextPreview,
       parse: trace.parse
     });
+    if (!this.messageTraceEnabled) {
+      return;
+    }
+
+    this.recentMessageTraces.push(trace);
+    if (this.recentMessageTraces.length > this.maxMessageTraceBuffer) {
+      const overflow = this.recentMessageTraces.length - this.maxMessageTraceBuffer;
+      this.recentMessageTraces.splice(0, overflow);
+    }
+
+    RawIngestLogger.write('jt808_message_trace', trace as unknown as Record<string, unknown>);
     void this.protocolMessageStorage.save(trace).catch((error) => {
       console.error('Failed to persist outbound protocol message trace:', error);
     });
