@@ -9,6 +9,8 @@ import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { spawn } from 'child_process';
 import { query as dbQuery } from '../storage/database';
+import { isDatabaseEnabled } from '../storage/database';
+import { ProtocolMessageStorage } from '../storage/protocolMessageStorage';
 import { archiveToRawH264 } from '../video/frameArchive';
 import { ReplayService } from '../streaming/replay';
 
@@ -22,6 +24,7 @@ export function createRoutes(
   const speedingManager = new SpeedingManager();
   const videoStorage = new VideoStorage();
   const imageStorage = new ImageStorage();
+  const protocolMessageStorage = new ProtocolMessageStorage();
   const manualVideoJobs = new Map<string, {
     id: string;
     vehicleId: string;
@@ -2783,6 +2786,96 @@ export function createRoutes(
       res.status(500).json({
         success: false,
         message: 'Failed to build alert decode review',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
+  router.get('/protocol/messages', async (req, res) => {
+    try {
+      const vehicleId = String(req.query.vehicleId || '').trim();
+      const directionRaw = String(req.query.direction || '').trim().toLowerCase();
+      const direction = directionRaw === 'inbound' || directionRaw === 'outbound'
+        ? directionRaw as 'inbound' | 'outbound'
+        : undefined;
+      const limit = Math.max(1, Math.min(Number(req.query.limit || 200), 5000));
+      const offset = Math.max(0, Number(req.query.offset || 0));
+      const messageIdRaw = String(req.query.messageId || req.query.messageIdHex || '').trim().toLowerCase();
+      const messageId = messageIdRaw
+        ? (messageIdRaw.startsWith('0x') ? parseInt(messageIdRaw, 16) : parseInt(messageIdRaw, 10))
+        : undefined;
+
+      if (isDatabaseEnabled()) {
+        const result = await protocolMessageStorage.list({
+          vehicleId: vehicleId || undefined,
+          messageId: Number.isFinite(messageId as number) ? Number(messageId) : undefined,
+          direction,
+          limit,
+          offset
+        });
+
+        const byMessageId = result.rows.reduce((acc: Record<string, number>, item: any) => {
+          const key = String(item.messageIdHex || 'unknown');
+          acc[key] = (acc[key] || 0) + 1;
+          return acc;
+        }, {});
+
+        res.json({
+          success: true,
+          source: 'database',
+          total: result.total,
+          count: result.rows.length,
+          filters: {
+            vehicleId: vehicleId || null,
+            direction: direction || null,
+            messageId: Number.isFinite(messageId as number) ? Number(messageId) : null,
+            messageIdHex: Number.isFinite(messageId as number) ? `0x${Number(messageId).toString(16).padStart(4, '0')}` : null,
+            limit,
+            offset
+          },
+          summary: {
+            byMessageId
+          },
+          data: result.rows
+        });
+        return;
+      }
+
+      const traces = tcpServer.getRecentMessageTraces({
+        vehicleId: vehicleId || undefined,
+        messageId: Number.isFinite(messageId as number) ? Number(messageId) : undefined,
+        direction,
+        limit
+      });
+
+      const byMessageId = traces.reduce((acc: Record<string, number>, item: any) => {
+        const key = String(item.messageIdHex || 'unknown');
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+
+      res.json({
+        success: true,
+        source: 'memory',
+        total: traces.length,
+        count: traces.length,
+        filters: {
+          vehicleId: vehicleId || null,
+          direction: direction || null,
+          messageId: Number.isFinite(messageId as number) ? Number(messageId) : null,
+          messageIdHex: Number.isFinite(messageId as number) ? `0x${Number(messageId).toString(16).padStart(4, '0')}` : null,
+          limit,
+          offset: 0
+        },
+        summary: {
+          byMessageId
+        },
+        data: traces
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to load protocol messages',
         error: error?.message || String(error)
       });
     }

@@ -72,6 +72,26 @@ CREATE TABLE IF NOT EXISTS videos (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS protocol_messages (
+  id BIGSERIAL PRIMARY KEY,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  direction TEXT NOT NULL DEFAULT 'inbound',
+  vehicle_id TEXT NOT NULL,
+  message_id INTEGER,
+  message_id_hex TEXT,
+  serial_number INTEGER NOT NULL DEFAULT 0,
+  body_length INTEGER NOT NULL DEFAULT 0,
+  is_subpackage BOOLEAN NOT NULL DEFAULT FALSE,
+  packet_count INTEGER,
+  packet_index INTEGER,
+  raw_frame_hex TEXT NOT NULL,
+  body_hex TEXT NOT NULL,
+  body_text_preview TEXT,
+  parse_success BOOLEAN,
+  parse_error TEXT,
+  parse JSONB
+);
+
 CREATE INDEX IF NOT EXISTS idx_alerts_device_time ON alerts(device_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status) WHERE status != 'resolved';
 CREATE INDEX IF NOT EXISTS idx_alerts_resolved_bool ON alerts(resolved);
@@ -83,3 +103,6 @@ CREATE INDEX IF NOT EXISTS idx_videos_alert_id ON videos(alert_id);
 CREATE INDEX IF NOT EXISTS idx_videos_device_start_time ON videos(device_id, start_time DESC);
 CREATE INDEX IF NOT EXISTS idx_videos_device_channel_start_time ON videos(device_id, channel, start_time DESC);
 CREATE INDEX IF NOT EXISTS idx_videos_device_channel_end_time ON videos(device_id, channel, end_time DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_messages_received_at ON protocol_messages(received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_messages_message_id_received_at ON protocol_messages(message_id, received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_messages_vehicle_received_at ON protocol_messages(vehicle_id, received_at DESC);

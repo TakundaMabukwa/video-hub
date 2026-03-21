@@ -17,6 +17,7 @@ import { AlertManager, AlertPriority } from '../alerts/alertManager';
 import { RawIngestLogger } from '../logging/rawIngestLogger';
 import { JTT808MessageType, Vehicle, LocationAlert, VehicleChannel } from '../types/jtt';
 import { getKnownVendorCodes, getVendorAlarmByCode, getVendorAlarmCatalog } from '../protocol/vendorAlarmCatalog';
+import { ProtocolMessageStorage } from '../storage/protocolMessageStorage';
 
 type ScreenshotFallbackResult = {
   ok: boolean;
@@ -132,6 +133,7 @@ export class JTT808Server {
   private lastKnownLocation = new Map<string, { latitude: number; longitude: number; timestamp: Date }>();
   private messageTraceSeq = 0;
   private recentMessageTraces: MessageTraceEntry[] = [];
+  private protocolMessageStorage = new ProtocolMessageStorage();
   private pendingCameraRequests = new Map<string, PendingCameraRequest[]>();
   private pendingScreenshotRequests = new Map<string, PendingScreenshotRequest[]>();
   private vehicleIdentityById = new Map<string, VehicleIdentity>();
@@ -408,6 +410,24 @@ export class JTT808Server {
   private async processMessage(buffer: Buffer, socket: net.Socket): Promise<void> {
     const message = JTT808Parser.parseMessage(buffer);
     if (!message) {
+      void this.protocolMessageStorage.save({
+        receivedAt: new Date().toISOString(),
+        direction: 'inbound',
+        vehicleId: '',
+        messageId: null,
+        messageIdHex: null,
+        serialNumber: 0,
+        bodyLength: 0,
+        isSubpackage: false,
+        rawFrameHex: buffer.toString('hex'),
+        bodyHex: '',
+        bodyTextPreview: '',
+        parseSuccess: false,
+        parseError: 'parse_failed',
+        parse: {}
+      }).catch((error) => {
+        console.error('Failed to persist raw parse-failed protocol message:', error);
+      });
       if (this.shouldLogNoisy('jt808_parse_failed', 5000)) {
         console.warn('Failed to parse JT/T 808 message');
       }
@@ -707,6 +727,8 @@ export class JTT808Server {
           alarmCode: vendorMapped.alarmCode ?? null,
           ...(options.metadata || {})
         }
+      }).catch((error) => {
+        console.error('Failed to process/forward vendor-mapped external alert:', error);
       });
     }
   }
@@ -1809,7 +1831,9 @@ export class JTT808Server {
     // Always forward to AlertManager so it can clear edge-trigger state when alarms drop.
     // Only skip verbose logging for "no-alert" packets.
     if (!hasAnyAlert) {
-      this.alertManager.processAlert(enriched as LocationAlert);
+      void this.alertManager.processAlert(enriched as LocationAlert).catch((error) => {
+        console.error('Failed to process/forward no-alert state packet:', error);
+      });
       return;
     }
     
@@ -1868,7 +1892,9 @@ export class JTT808Server {
     // this.alertStorage.saveAlert(alert);
     
     // Process through alert manager for escalation and screenshot capture
-    this.alertManager.processAlert(enriched as LocationAlert);
+    void this.alertManager.processAlert(enriched as LocationAlert).catch((error) => {
+      console.error('Failed to process/forward alert packet:', error);
+    });
   }
 
   private handleDisconnection(socket: net.Socket): void {
@@ -2117,6 +2143,8 @@ export class JTT808Server {
             resourceStorageType: item.storageType,
             resourceFileSize: item.fileSize
           }
+        }).catch((error) => {
+          console.error('Failed to process/forward resource-list alert:', error);
         });
       }
     }
@@ -2942,10 +2970,12 @@ export class JTT808Server {
   getRecentMessageTraces(options?: {
     vehicleId?: string;
     messageId?: number;
+    direction?: 'inbound' | 'outbound';
     limit?: number;
   }): MessageTraceEntry[] {
     const vehicleId = options?.vehicleId ? String(options.vehicleId).trim() : '';
     const messageId = typeof options?.messageId === 'number' ? options?.messageId : undefined;
+    const direction = options?.direction;
     const limit = Math.max(1, Math.min(Number(options?.limit || 50), this.maxMessageTraceBuffer));
 
     let rows = [...this.recentMessageTraces];
@@ -2954,6 +2984,9 @@ export class JTT808Server {
     }
     if (typeof messageId === 'number' && Number.isFinite(messageId)) {
       rows = rows.filter((row) => row.messageId === messageId);
+    }
+    if (direction) {
+      rows = rows.filter((row) => row.direction === direction);
     }
 
     return rows.slice(-limit).reverse();
@@ -2994,6 +3027,9 @@ export class JTT808Server {
     }
 
     RawIngestLogger.write('jt808_message_trace', trace as unknown as Record<string, unknown>);
+    void this.protocolMessageStorage.save(trace).catch((error) => {
+      console.error('Failed to persist inbound protocol message trace:', error);
+    });
     try {
       this.messageTraceCallback?.(trace);
     } catch {
@@ -3033,6 +3069,9 @@ export class JTT808Server {
     }
 
     RawIngestLogger.write('jt808_message_trace', trace as unknown as Record<string, unknown>);
+    void this.protocolMessageStorage.save(trace).catch((error) => {
+      console.error('Failed to persist outbound protocol message trace:', error);
+    });
     try {
       this.messageTraceCallback?.(trace);
     } catch {
@@ -3106,6 +3145,8 @@ export class JTT808Server {
             multimediaFormat,
             eventCode
           }
+        }).catch((error) => {
+          console.error('Failed to process/forward multimedia-event alert:', error);
         });
       }
 

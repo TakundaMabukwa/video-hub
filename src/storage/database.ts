@@ -125,6 +125,31 @@ export const ensureRuntimeSchema = async (): Promise<void> => {
     `ALTER TABLE IF EXISTS videos ADD COLUMN IF NOT EXISTS alert_id TEXT`,
     `ALTER TABLE IF EXISTS videos ADD COLUMN IF NOT EXISTS frame_count INTEGER`,
 
+    // durable protocol/raw message archive
+    `CREATE TABLE IF NOT EXISTS protocol_messages (
+      id BIGSERIAL PRIMARY KEY,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      direction TEXT NOT NULL DEFAULT 'inbound',
+      vehicle_id TEXT NOT NULL,
+      message_id INTEGER,
+      message_id_hex TEXT,
+      serial_number INTEGER NOT NULL DEFAULT 0,
+      body_length INTEGER NOT NULL DEFAULT 0,
+      is_subpackage BOOLEAN NOT NULL DEFAULT FALSE,
+      packet_count INTEGER,
+      packet_index INTEGER,
+      raw_frame_hex TEXT NOT NULL,
+      body_hex TEXT NOT NULL,
+      body_text_preview TEXT,
+      parse_success BOOLEAN,
+      parse_error TEXT,
+      parse JSONB
+    )`,
+    `ALTER TABLE IF EXISTS protocol_messages ALTER COLUMN message_id DROP NOT NULL`,
+    `ALTER TABLE IF EXISTS protocol_messages ALTER COLUMN message_id_hex DROP NOT NULL`,
+    `ALTER TABLE IF EXISTS protocol_messages ADD COLUMN IF NOT EXISTS parse_success BOOLEAN`,
+    `ALTER TABLE IF EXISTS protocol_messages ADD COLUMN IF NOT EXISTS parse_error TEXT`,
+
     // indexes used heavily by alert media routes
     `CREATE INDEX IF NOT EXISTS idx_images_alert_id ON images(alert_id)`,
     `CREATE INDEX IF NOT EXISTS idx_images_device_timestamp ON images(device_id, timestamp DESC)`,
@@ -132,7 +157,10 @@ export const ensureRuntimeSchema = async (): Promise<void> => {
     `CREATE INDEX IF NOT EXISTS idx_videos_device_start_time ON videos(device_id, start_time DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_videos_device_channel_start_time ON videos(device_id, channel, start_time DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_videos_device_channel_end_time ON videos(device_id, channel, end_time DESC)`,
-    
+    `CREATE INDEX IF NOT EXISTS idx_protocol_messages_received_at ON protocol_messages(received_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_protocol_messages_message_id_received_at ON protocol_messages(message_id, received_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_protocol_messages_vehicle_received_at ON protocol_messages(vehicle_id, received_at DESC)`,
+     
     // indexes for alert deduplication
     `CREATE INDEX IF NOT EXISTS idx_alerts_dedup ON alerts(device_id, channel, alert_type, timestamp DESC)`
   ];
