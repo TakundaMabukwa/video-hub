@@ -166,6 +166,12 @@ export class JTT808Server {
   private readonly verboseLocationLogs = ['1', 'true', 'yes', 'on'].includes(
     String(process.env.VERBOSE_LOCATION_LOGS ?? 'false').trim().toLowerCase()
   );
+  private readonly verboseMediaLogs = ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.VERBOSE_MEDIA_LOGS ?? 'false').trim().toLowerCase()
+  );
+  private readonly verboseResourceLogs = ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.VERBOSE_RESOURCE_LOGS ?? 'false').trim().toLowerCase()
+  );
   private readonly videoProcessingEnabled = ['1', 'true', 'yes', 'on'].includes(
     String(process.env.VIDEO_PROCESSING_ENABLED ?? 'true').trim().toLowerCase()
   );
@@ -508,7 +514,9 @@ export class JTT808Server {
         this.parseCapabilities(message.body, message.terminalPhone);
         break;
       case 0x1205: // Resource list response
-        console.log(`📝 Resource list response (0x1205) from ${message.terminalPhone}`);
+        if (this.verboseResourceLogs) {
+          console.log(`📝 Resource list response (0x1205) from ${message.terminalPhone}`);
+        }
 
         if (message.isSubpackage && message.packetCount && message.packetIndex) {
           this.handleResourceListSubpackage(
@@ -542,7 +550,7 @@ export class JTT808Server {
         this.handleMultimediaEvent(message, socket);
         break;
       case 0x0801: // Multimedia data upload
-        if (message.isSubpackage) {
+        if (message.isSubpackage && this.verboseMediaLogs) {
           console.log(`📦 0x0801 subpackage ${message.packetIndex}/${message.packetCount} from ${message.terminalPhone}, body=${message.body.length}`);
         }
         await this.handleMultimediaData(message, socket);
@@ -2015,7 +2023,9 @@ export class JTT808Server {
     }
 
     pending.parts.set(packetIndex, bodyPart);
-    console.log(`Resource list subpackage ${packetIndex}/${packetCount} from ${vehicleId} (partLen=${bodyPart.length})`);
+    if (this.verboseResourceLogs) {
+      console.log(`Resource list subpackage ${packetIndex}/${packetCount} from ${vehicleId} (partLen=${bodyPart.length})`);
+    }
 
     if (pending.parts.size < packetCount) {
       return;
@@ -2025,7 +2035,9 @@ export class JTT808Server {
     for (let i = 1; i <= packetCount; i++) {
       const part = pending.parts.get(i);
       if (!part) {
-        console.log(`Resource list assembly missing part ${i}/${packetCount} for ${vehicleId}`);
+        if (this.verboseResourceLogs) {
+          console.log(`Resource list assembly missing part ${i}/${packetCount} for ${vehicleId}`);
+        }
         return;
       }
       orderedParts.push(part);
@@ -2033,7 +2045,9 @@ export class JTT808Server {
 
     this.pendingResourceLists.delete(key);
     const merged = Buffer.concat(orderedParts);
-    console.log(`Resource list merged ${packetCount} packets for ${vehicleId} (len=${merged.length})`);
+    if (this.verboseResourceLogs) {
+      console.log(`Resource list merged ${packetCount} packets for ${vehicleId} (len=${merged.length})`);
+    }
     const parsedResourceList = this.parseResourceList(vehicleId, merged);
     if (parsedResourceList) {
       this.emitResourceListAlerts(vehicleId, parsedResourceList);
@@ -2047,7 +2061,9 @@ export class JTT808Server {
     items: ResourceVideoItem[];
   } | null {
     if (body.length < 2) {
-      console.log(`Resource list body too short: ${body.length} bytes`);
+      if (this.verboseResourceLogs) {
+        console.log(`Resource list body too short: ${body.length} bytes`);
+      }
       return null;
     }
 
@@ -2060,24 +2076,32 @@ export class JTT808Server {
       querySerial = body.readUInt16BE(0);
       expectedTotal = body.readUInt32BE(2);
       listOffset = 6;
-      console.log(`Resource list header: serial=${querySerial}, total=${expectedTotal}`);
+      if (this.verboseResourceLogs) {
+        console.log(`Resource list header: serial=${querySerial}, total=${expectedTotal}`);
+      }
     } else if (body.length >= 2 && (body.length - 2) % 28 === 0) {
       // Compatibility: some terminals prepend count(2).
       expectedTotal = body.readUInt16BE(0);
       listOffset = 2;
-      console.log(`Resource list header (compat): count=${expectedTotal}`);
+      if (this.verboseResourceLogs) {
+        console.log(`Resource list header (compat): count=${expectedTotal}`);
+      }
     } else {
       // Last-resort: infer an item-aligned offset.
       listOffset = body.length >= 6 ? 6 : 2;
       while (listOffset > 0 && (body.length - listOffset) % 28 !== 0) {
         listOffset--;
       }
-      console.log(`Resource list body non-standard: len=${body.length}, inferredOffset=${listOffset}`);
+      if (this.verboseResourceLogs) {
+        console.log(`Resource list body non-standard: len=${body.length}, inferredOffset=${listOffset}`);
+      }
     }
 
     const payloadBytes = Math.max(0, body.length - listOffset);
     const itemCount = Math.floor(payloadBytes / 28);
-    console.log(`Parsed ${itemCount} video file item(s)`);
+    if (this.verboseResourceLogs) {
+      console.log(`Parsed ${itemCount} video file item(s)`);
+    }
 
     const items: ResourceVideoItem[] = [];
     let offset = listOffset;
@@ -2097,7 +2121,9 @@ export class JTT808Server {
       const fileSize = body.readUInt32BE(offset + 24);
 
       const alarmSummary = alarmLabels.length > 0 ? alarmLabels.join(', ') : 'none';
-      console.log(`  File ${i + 1}: Ch${channel} ${startTime} to ${endTime} (${fileSize} bytes, alarm64=${alarmFlag64Hex}, flags=${alarmSummary})`);
+      if (this.verboseResourceLogs) {
+        console.log(`  File ${i + 1}: Ch${channel} ${startTime} to ${endTime} (${fileSize} bytes, alarm64=${alarmFlag64Hex}, flags=${alarmSummary})`);
+      }
       items.push({
         channel,
         startTime,
@@ -2115,7 +2141,9 @@ export class JTT808Server {
     }
 
     if (typeof expectedTotal === 'number' && expectedTotal > 0 && expectedTotal !== items.length) {
-      console.log(`Resource list partial parse: parsed=${items.length}, terminalTotal=${expectedTotal}`);
+      if (this.verboseResourceLogs) {
+        console.log(`Resource list partial parse: parsed=${items.length}, terminalTotal=${expectedTotal}`);
+      }
     }
 
     this.latestResourceLists.set(vehicleId, {
@@ -2796,7 +2824,9 @@ export class JTT808Server {
     
     const command = this.buildMessage(0x9201, vehicleId, serial, commandBody);
     
-    console.log(`🎥 Camera video requested: ${vehicleId} ch${channel} from ${startTime.toISOString()} to ${endTime.toISOString()}`);
+    if (this.verboseResourceLogs) {
+      console.log(`🎥 Camera video requested: ${vehicleId} ch${channel} from ${startTime.toISOString()} to ${endTime.toISOString()}`);
+    }
     socket.write(command);
     this.pushOutboundMessageTrace(vehicleId, 0x9201, serial, command, commandBody, {
       parser: 'outbound-video-request-0x9201',
@@ -2831,7 +2861,9 @@ export class JTT808Server {
       endTime
     );
     
-    console.log(`📝 Query resource list: ${vehicleId} ch${channel} from ${startTime.toISOString()} to ${endTime.toISOString()}`);
+    if (this.verboseResourceLogs) {
+      console.log(`📝 Query resource list: ${vehicleId} ch${channel} from ${startTime.toISOString()} to ${endTime.toISOString()}`);
+    }
     socket.write(command);
     this.pushOutboundMessageTrace(vehicleId, 0x9205, serial, command, command.slice(12, -2), {
       parser: 'outbound-resource-query-0x9205',

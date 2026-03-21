@@ -13,6 +13,9 @@ export class MultimediaParser {
   private static fragmentBuffers = new Map<string, MultimediaFragment>();
   private static imageStorage = new ImageStorage();
   private static lastInvalidHeaderLogAt = 0;
+  private static readonly verboseMediaLogs = ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.VERBOSE_MEDIA_LOGS ?? 'false').trim().toLowerCase()
+  );
 
   private static findJpegStart(data: Buffer): number {
     for (let i = 0; i < data.length - 1; i++) {
@@ -64,7 +67,9 @@ export class MultimediaParser {
           const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
           const filename = `${vehicleId}_ch${channelId}_event${eventCode}_${timestamp}.jpg`;
 
-          console.log(`Complete JPEG: ${jpegData.length} bytes, channel ${channelId}, event ${eventCode}`);
+          if (this.verboseMediaLogs) {
+            console.log(`Complete JPEG: ${jpegData.length} bytes, channel ${channelId}, event ${eventCode}`);
+          }
           return { type: 'jpeg', data: jpegData, filename, channel: channelId };
         }
 
@@ -80,10 +85,14 @@ export class MultimediaParser {
             fragments: [chunk],
             timestamp: new Date()
           });
-          console.log(`Fragment 1 buffered for ${key}`);
+          if (this.verboseMediaLogs) {
+            console.log(`Fragment 1 buffered for ${key}`);
+          }
         } else {
           existing.fragments.push(chunk);
-          console.log(`Fragment ${existing.fragments.length} buffered for ${key}`);
+          if (this.verboseMediaLogs) {
+            console.log(`Fragment ${existing.fragments.length} buffered for ${key}`);
+          }
 
           const combined = Buffer.concat(existing.fragments);
           const combinedStart = this.findJpegStart(combined);
@@ -96,14 +105,16 @@ export class MultimediaParser {
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
             const filename = `${vehicleId}_ch${channelId}_event${eventCode}_${timestamp}.jpg`;
 
-            console.log(`Complete JPEG from ${existing.fragments.length} fragments: ${jpegData.length} bytes`);
+            if (this.verboseMediaLogs) {
+              console.log(`Complete JPEG from ${existing.fragments.length} fragments: ${jpegData.length} bytes`);
+            }
             return { type: 'jpeg', data: jpegData, filename, channel: channelId };
           }
         }
       } else {
         // Throttle invalid payload warnings to avoid log flooding.
         const now = Date.now();
-        if (now - this.lastInvalidHeaderLogAt > 5000) {
+        if (this.verboseMediaLogs && now - this.lastInvalidHeaderLogAt > 5000) {
           this.lastInvalidHeaderLogAt = now;
           console.warn(`Invalid JPEG payload for 0x0801 image message: ${payload[0]?.toString(16)} ${payload[1]?.toString(16)}`);
         }
@@ -144,7 +155,9 @@ export class MultimediaParser {
     const filePath = path.join(mediaDir, filename);
     fs.writeFileSync(filePath, data);
 
-    console.log(`Saved valid JPEG: ${filePath} (${data.length} bytes)`);
+    if (this.verboseMediaLogs) {
+      console.log(`Saved valid JPEG: ${filePath} (${data.length} bytes)`);
+    }
 
     // Save to database
     try {

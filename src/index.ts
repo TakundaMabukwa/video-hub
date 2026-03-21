@@ -207,7 +207,7 @@ async function startServer() {
     alertManager = new ForwardingAlertManager(workerForwarder);
     tcpServer.setAlertManager(alertManager);
   }
-  if (INGRESS_ENABLED) {
+  if (INGRESS_ENABLED && ALERT_PROCESSING_ENABLED) {
     tcpServer.attachAlertCommandBridge(alertManager);
   }
   if (!INGRESS_ENABLED && ALERT_PROCESSING_ENABLED && workerForwarder.hasListenerServer()) {
