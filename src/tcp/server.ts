@@ -820,11 +820,13 @@ export class JTT808Server {
       
       console.log(`✅ Camera authenticated: ${message.terminalPhone} from ${ipAddress}`);
       
-      // Query capabilities to discover channels
-      setTimeout(() => {
-        console.log(`🔍 Querying capabilities for ${message.terminalPhone}...`);
-        this.queryCapabilities(message.terminalPhone);
-      }, 1000);
+      if (this.videoProcessingEnabled) {
+        // Query capabilities only on servers that are allowed to manage video streams.
+        setTimeout(() => {
+          console.log(`🔍 Querying capabilities for ${message.terminalPhone}...`);
+          this.queryCapabilities(message.terminalPhone);
+        }, 1000);
+      }
 
       const autoConfigureMask = String(process.env.AUTO_CONFIGURE_VIDEO_ALARM_MASK ?? 'true').toLowerCase() !== 'false';
       if (autoConfigureMask) {
@@ -1972,6 +1974,11 @@ export class JTT808Server {
     vehicle.channels = channels;
     console.log(`✅ Discovered ${channels.length} video channels`);
     
+    if (!this.videoProcessingEnabled) {
+      console.log(`⏭️ Skipping auto-start of video streams for ${vehiclePhone} because VIDEO_PROCESSING_ENABLED=false`);
+      return;
+    }
+
     // Auto-start video streaming on all channels to ensure circular buffer is always filled
     console.log(`\n🎬 Auto-starting video streams on all channels for alert capture...`);
     for (const channel of channels) {
