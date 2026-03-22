@@ -1005,6 +1005,30 @@ export function createRoutes(
       timestamp: alert?.timestamp
     };
   };
+  const inferAlertProtocol = (alert: any): string | null => {
+    const metadata = alert?.metadata || {};
+    const explicit = String(metadata?.sourceProtocol || '').trim().toLowerCase();
+    if (explicit) return explicit;
+
+    const sourceMessageId = String(metadata?.sourceMessageId || '').trim().toLowerCase();
+    if (!sourceMessageId) return null;
+    if (['0x0200', '0x0704'].includes(sourceMessageId)) return 'jt808';
+    if (['0x0800', '0x0801', '0x0900', '0x1003', '0x1205'].includes(sourceMessageId)) return 'jtt1078';
+    return sourceMessageId;
+  };
+  const matchesAlertProtocolFilter = (
+    alert: any,
+    filters: { sourceMessageId?: string; sourceProtocol?: string; status?: string; priority?: string }
+  ) => {
+    const metadata = alert?.metadata || {};
+    const sourceMessageId = String(metadata?.sourceMessageId || '').trim().toLowerCase();
+    const sourceProtocol = inferAlertProtocol(alert);
+    if (filters.sourceMessageId && sourceMessageId !== filters.sourceMessageId) return false;
+    if (filters.sourceProtocol && sourceProtocol !== filters.sourceProtocol) return false;
+    if (filters.status && String(alert?.status || '').toLowerCase() !== filters.status) return false;
+    if (filters.priority && String(alert?.priority || '').toLowerCase() !== filters.priority) return false;
+    return true;
+  };
   const mergeRecentAlerts = (lists: any[][], limit: number) => {
     const seen = new Set<string>();
     const merged: any[] = [];
@@ -1940,6 +1964,94 @@ export function createRoutes(
       res.json({ success: true, total: result.rows.length, data: result.rows });
     } catch (error) {
       res.status(500).json({ success: false, message: 'Failed to fetch alerts by device' });
+    }
+  });
+
+  // Get alerts by protocol or source message id
+  router.get('/alerts/by-protocol', async (req, res) => {
+    try {
+      const sourceMessageId = String(req.query.sourceMessageId || req.query.messageId || '').trim().toLowerCase();
+      const sourceProtocol = String(req.query.sourceProtocol || req.query.protocol || '').trim().toLowerCase();
+      const status = String(req.query.status || '').trim().toLowerCase();
+      const priority = String(req.query.priority || '').trim().toLowerCase();
+      const limit = toNumericLimit(req.query.limit, 50);
+      const hasMinutesFilter = req.query.minutes !== undefined && req.query.minutes !== null && String(req.query.minutes).trim() !== '';
+      const minutes = hasMinutesFilter ? toNumericMinutes(req.query.minutes, 180) : null;
+
+      const filters = { sourceMessageId, sourceProtocol, status, priority };
+
+      const memAlerts = tcpServer
+        .getAlertManager()
+        .getActiveAlerts()
+        .map((a: any) => normalizeAlertRecord(a))
+        .filter((a: any) => matchesAlertProtocolFilter(a, filters));
+
+      const where: string[] = [];
+      const params: any[] = [];
+      let p = 1;
+      if (minutes !== null) {
+        where.push(`timestamp >= NOW() - ($${p++}::int * INTERVAL '1 minute')`);
+        params.push(minutes);
+      }
+      if (status) {
+        where.push(`LOWER(COALESCE(status, '')) = LOWER($${p++})`);
+        params.push(status);
+      }
+      if (priority) {
+        where.push(`LOWER(COALESCE(priority, '')) = LOWER($${p++})`);
+        params.push(priority);
+      }
+      if (sourceMessageId) {
+        where.push(`LOWER(COALESCE(metadata->>'sourceMessageId', '')) = LOWER($${p++})`);
+        params.push(sourceMessageId);
+      }
+      if (sourceProtocol) {
+        where.push(`(
+          LOWER(COALESCE(metadata->>'sourceProtocol', '')) = LOWER($${p++})
+          OR (
+            LOWER($${p}) = 'jt808'
+            AND LOWER(COALESCE(metadata->>'sourceMessageId', '')) IN ('0x0200', '0x0704')
+          )
+          OR (
+            LOWER($${p}) = 'jtt1078'
+            AND LOWER(COALESCE(metadata->>'sourceMessageId', '')) IN ('0x0800', '0x0801', '0x0900', '0x1003', '0x1205')
+          )
+        )`);
+        params.push(sourceProtocol);
+      }
+
+      params.push(Math.max(limit * 5, 50));
+      const dbResult = await require('../storage/database').query(
+        `SELECT id, device_id, channel, alert_type, priority, status, timestamp, latitude, longitude, metadata
+         FROM alerts
+         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+         ORDER BY timestamp DESC
+         LIMIT $${p}`,
+        params
+      );
+
+      const dbAlerts = dbResult.rows.map((r: any) => normalizeAlertRecord(r));
+      const alerts = mergeRecentAlerts([memAlerts, dbAlerts], limit).map(withAlertMediaLinks);
+
+      res.json({
+        success: true,
+        alerts,
+        count: alerts.length,
+        filters: {
+          sourceMessageId: sourceMessageId || null,
+          sourceProtocol: sourceProtocol || null,
+          status: status || null,
+          priority: priority || null,
+          minutes
+        },
+        source: 'merged'
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch alerts by protocol',
+        error: error?.message || String(error)
+      });
     }
   });
 
