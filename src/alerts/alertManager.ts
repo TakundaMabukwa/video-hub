@@ -978,12 +978,22 @@ export class AlertManager extends EventEmitter {
   }
 
   private filterActionableSignals(signals: string[]): string[] {
+    const alwaysSuppressed = new Set(
+      String(
+        process.env.ALERT_SUPPRESSED_SIGNALS ||
+        'jtt1078_storage_failure,jtt1078_abnormal_driving,platform_video_alarm_0103,platform_video_alarm_0106'
+      )
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    );
+
     // Profiles:
     // - operational (default): hide persistent infrastructure faults to surface safety/behavior alerts
     // - full/all/raw: keep every documented signal
     const profile = String(process.env.ALERT_SIGNAL_PROFILE ?? 'full').toLowerCase().trim();
     if (profile === 'full' || profile === 'all' || profile === 'raw') {
-      return signals;
+      return signals.filter((s) => !alwaysSuppressed.has(s));
     }
 
     const suppressedExact = new Set([
@@ -1003,6 +1013,7 @@ export class AlertManager extends EventEmitter {
     ]);
 
     return signals.filter((s) => {
+      if (alwaysSuppressed.has(s)) return false;
       if (suppressedExact.has(s)) return false;
       if (s.startsWith('jtt1078_signal_loss_channels_')) return false;
       if (s.startsWith('jtt1078_signal_blocking_channels_')) return false;
