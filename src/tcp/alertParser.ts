@@ -377,7 +377,7 @@ export class AlertParser {
       domain
     };
     if (domain === 'ADAS' || domain === 'DMS') {
-      Object.assign(extension, this.parseActiveSafetyAdditionalInfo(data));
+      Object.assign(extension, this.parseActiveSafetyAdditionalInfo(data, domain));
     }
     if (!Array.isArray(alert.vendorExtensions)) {
       alert.vendorExtensions = [];
@@ -385,9 +385,12 @@ export class AlertParser {
     alert.vendorExtensions.push(extension);
   }
 
-  private static parseActiveSafetyAdditionalInfo(data: Buffer): Partial<VendorAdditionalInfoExtension> {
-    // Official 0x64/0x65 active-safety additional info layout observed in deployment docs:
-    // alarmId(4) + flag(1) + eventType(1) + level(1) + context fields + snapshot + identification.
+  private static parseActiveSafetyAdditionalInfo(
+    data: Buffer,
+    domain: 'ADAS' | 'DMS'
+  ): Partial<VendorAdditionalInfoExtension> {
+    // SmallChi JT808 SuBiao/YueBiao source confirms the shared leading layout:
+    // alarmId(4) + flag(1) + eventType(1) + level(1) + domain-specific context + snapshot + identification.
     if (!data || data.length < 7) return {};
 
     const parsed: Partial<VendorAdditionalInfoExtension> = {
@@ -397,13 +400,25 @@ export class AlertParser {
       alarmLevel: data.readUInt8(6)
     };
 
-    if (data.length >= 13) {
+    if (domain === 'ADAS' && data.length >= 13) {
       parsed.frontObjectSpeed = data.readUInt8(7);
       parsed.frontObjectDistance = data.readUInt8(8);
       parsed.deviationType = data.readUInt8(9);
       parsed.roadSignType = data.readUInt8(10);
       parsed.roadSignData = data.readUInt8(11);
       parsed.sourceSpeed = data.readUInt8(12);
+    }
+
+    if (domain === 'DMS') {
+      if (data.length >= 8) {
+        parsed.fatigueDegree = data.readUInt8(7);
+      }
+      if (data.length >= 12) {
+        parsed.reservedBytesHex = data.slice(8, 12).toString('hex');
+      }
+      if (data.length >= 13) {
+        parsed.sourceSpeed = data.readUInt8(12);
+      }
     }
 
     if (data.length >= 29) {
@@ -417,7 +432,19 @@ export class AlertParser {
       parsed.vehicleStatus = data.readUInt16BE(29);
     }
 
-    if (data.length >= 47) {
+    // SuBiao uses a 7-byte terminal ID tail; YueBiao uses a 30-byte one.
+    if (data.length >= 71) {
+      parsed.identificationFormat = 'yuebiao';
+      parsed.identification = {
+        terminalId: data.slice(31, 61).toString('ascii').replace(/\0+$/, ''),
+        timestamp: this.parseTimestamp(data.slice(61, 67)),
+        sequenceNumber: data.readUInt8(67),
+        attachmentCount: data.readUInt8(68),
+        retain1: data.readUInt8(69),
+        retain2: data.readUInt8(70)
+      };
+    } else if (data.length >= 47) {
+      parsed.identificationFormat = 'subiao';
       parsed.identification = {
         terminalId: data.slice(31, 38).toString('ascii').replace(/\0+$/, ''),
         timestamp: this.parseTimestamp(data.slice(38, 44)),

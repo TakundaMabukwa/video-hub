@@ -120,6 +120,8 @@ export interface VendorAdditionalInfoExtension {
   flagStatus?: number;
   eventType?: number;
   alarmLevel?: number;
+  fatigueDegree?: number;
+  reservedBytesHex?: string;
   sourceSpeed?: number;
   sourceAltitude?: number;
   sourceLatitude?: number;
@@ -131,12 +133,15 @@ export interface VendorAdditionalInfoExtension {
   deviationType?: number;
   roadSignType?: number;
   roadSignData?: number;
+  identificationFormat?: 'subiao' | 'yuebiao';
   identification?: {
     terminalId?: string;
     timestamp?: Date;
     sequenceNumber?: number;
     attachmentCount?: number;
     reserved?: number;
+    retain1?: number;
+    retain2?: number;
   };
 }
 

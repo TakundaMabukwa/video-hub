@@ -166,6 +166,24 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
     sourceRef: 'Vendor ADAS code list'
   },
   {
+    code: 10018,
+    type: 'ADAS: Solid line lane change alarm',
+    signalCode: 'adas_10018_solid_line_lane_change_alarm',
+    domain: 'ADAS',
+    defaultPriority: 'high',
+    meaning: 'Solid line lane change event reported by ADAS.',
+    sourceRef: 'SmallChi JT808 YueBiao 0x64'
+  },
+  {
+    code: 10019,
+    type: 'ADAS: Aisle pedestrian detection alarm',
+    signalCode: 'adas_10019_aisle_pedestrian_detection_alarm',
+    domain: 'ADAS',
+    defaultPriority: 'medium',
+    meaning: 'Aisle pedestrian detection event reported by ADAS.',
+    sourceRef: 'SmallChi JT808 YueBiao 0x64'
+  },
+  {
     code: 10101,
     type: 'DMS: Fatigue driving alarm',
     signalCode: 'dms_10101_fatigue_driving_alarm',
@@ -343,7 +361,9 @@ const STRUCTURED_ACTIVE_SAFETY_EVENT_CODE_MAP: Record<'ADAS' | 'DMS', Record<num
     7: 10007,
     8: 10008,
     16: 10016,
-    17: 10017
+    17: 10017,
+    18: 10018,
+    19: 10019
   },
   DMS: {
     1: 10101,

@@ -66,6 +66,14 @@ const run = () => {
     getVendorAlarmByStructuredEvent('DMS', 2)?.signalCode,
     'dms_10102_handheld_phone_alarm'
   );
+  assert.equal(
+    getVendorAlarmByStructuredEvent('ADAS', 18)?.signalCode,
+    'adas_10018_solid_line_lane_change_alarm'
+  );
+  assert.equal(
+    getVendorAlarmByStructuredEvent('ADAS', 19)?.signalCode,
+    'adas_10019_aisle_pedestrian_detection_alarm'
+  );
 
   console.log('vendor-alert-conformance: ok');
 };
