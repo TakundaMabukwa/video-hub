@@ -24,12 +24,15 @@ type FailureState = {
   lastRecoveryAt?: number;
 };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export class WorkerForwarder {
   private readonly alertWorkerUrl?: string;
   private readonly videoWorkerUrl?: string;
   private readonly listenerServerUrl?: string;
   private readonly authToken?: string;
   private readonly forwardTimeoutMs: number;
+  private readonly forwardRetryCount: number;
   private readonly failureThreshold: number;
   private readonly recoveryCooldownMs: number;
   private readonly recoveryCommands: Partial<Record<ForwardTarget, string>>;
@@ -41,6 +44,7 @@ export class WorkerForwarder {
     this.listenerServerUrl = this.normalizeBaseUrl(options.listenerServerUrl);
     this.authToken = options.authToken?.trim() || undefined;
     this.forwardTimeoutMs = Math.max(1000, Number(options.forwardTimeoutMs || 15000));
+    this.forwardRetryCount = Math.max(1, Number(process.env.FORWARD_RETRY_COUNT || 3));
     this.failureThreshold = Math.max(1, Number(options.failureThreshold || 5));
     this.recoveryCooldownMs = Math.max(10000, Number(options.recoveryCooldownMs || 300000));
     this.recoveryCommands = {
@@ -140,35 +144,64 @@ export class WorkerForwarder {
 
   private async postJson(target: ForwardTarget, url: string, body: any): Promise<void> {
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      'Connection': 'close'
     };
     if (this.authToken) {
       headers['X-Internal-Token'] = this.authToken;
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.forwardTimeoutMs);
+    let lastError: any = null;
+    for (let attempt = 1; attempt <= this.forwardRetryCount; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), this.forwardTimeoutMs);
 
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: controller.signal
-      });
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal: controller.signal
+        });
 
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`Forward failed ${response.status}: ${text || response.statusText}`);
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          throw new Error(`Forward failed ${response.status}: ${text || response.statusText}`);
+        }
+
+        this.resetFailureState(target);
+        return;
+      } catch (error: any) {
+        lastError = error;
+        const canRetry = attempt < this.forwardRetryCount && this.isRetryableForwardError(error);
+        if (!canRetry) {
+          this.recordFailure(target, url, error);
+          throw error;
+        }
+        console.warn(
+          `[WorkerForwarder] ${target} request failed on attempt ${attempt}/${this.forwardRetryCount} for ${url}: ${error?.message || error}`
+        );
+        await sleep(250 * attempt);
+      } finally {
+        clearTimeout(timeout);
       }
-
-      this.resetFailureState(target);
-    } catch (error: any) {
-      this.recordFailure(target, url, error);
-      throw error;
-    } finally {
-      clearTimeout(timeout);
     }
+
+    this.recordFailure(target, url, lastError);
+    throw lastError;
+  }
+
+  private isRetryableForwardError(error: any): boolean {
+    const message = String(error?.message || '').toLowerCase();
+    const causeCode = String(error?.cause?.code || '').toUpperCase();
+    return (
+      message.includes('fetch failed') ||
+      message.includes('aborted') ||
+      causeCode === 'ECONNRESET' ||
+      causeCode === 'ETIMEDOUT' ||
+      causeCode === 'UND_ERR_SOCKET' ||
+      causeCode === 'UND_ERR_CONNECT_TIMEOUT'
+    );
   }
 
   private resetFailureState(target: ForwardTarget): void {
