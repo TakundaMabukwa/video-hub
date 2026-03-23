@@ -106,6 +106,18 @@ export class WorkerForwarder {
     });
   }
 
+  getAlertWorkerUrl(): string | undefined {
+    return this.alertWorkerUrl;
+  }
+
+  getVideoWorkerUrl(): string | undefined {
+    return this.videoWorkerUrl;
+  }
+
+  getListenerServerUrl(): string | undefined {
+    return this.listenerServerUrl;
+  }
+
   private serializeAlert(alert: LocationAlert): any {
     return {
       ...alert,

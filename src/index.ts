@@ -340,7 +340,7 @@ async function startServer() {
     `Background capture mode: streams=${BACKGROUND_STREAMS_ENABLED ? 'on' : 'off'}, keepWithoutClients=${KEEP_STREAMS_WITHOUT_CLIENTS ? 'on' : 'off'}, screenshotFanout=${AUTO_SCREENSHOT_FANOUT_ENABLED ? 'on' : 'off'}`
   );
   
-  app.use('/api', createRoutes(tcpServer, udpServer, replayService));
+  app.use('/api', createRoutes(tcpServer, udpServer, replayService, workerForwarder));
   if (ALERT_PROCESSING_ENABLED) {
     app.use('/api/alerts', createAlertRoutes());
   }

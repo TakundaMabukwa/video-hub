@@ -13,11 +13,13 @@ import { isDatabaseEnabled } from '../storage/database';
 import { ProtocolMessageStorage } from '../storage/protocolMessageStorage';
 import { archiveToRawH264 } from '../video/frameArchive';
 import { ReplayService } from '../streaming/replay';
+import { WorkerForwarder } from '../services/workerForwarder';
 
 export function createRoutes(
   tcpServer: JTT808Server,
   udpServer: UDPRTPServer,
-  replayService?: ReplayService
+  replayService?: ReplayService,
+  workerForwarder?: WorkerForwarder
 ): express.Router {
   const router = express.Router();
   const FTP_DOWNLOADS_ENABLED = false;
@@ -42,6 +44,54 @@ export function createRoutes(
     persistedVideoUrl?: string;
     error?: string;
   }>();
+  const envFlag = (name: string, fallback: boolean) => {
+    const raw = process.env[name];
+    if (typeof raw !== 'string' || !raw.trim()) return fallback;
+    const normalized = raw.trim().toLowerCase();
+    return ['1', 'true', 'yes', 'on'].includes(normalized);
+  };
+  const normalizeBaseUrl = (value?: string | null) => String(value || '').trim().replace(/\/+$/, '');
+  const ingressEnabled = envFlag('INGRESS_ENABLED', true);
+  const listenerBaseUrl = normalizeBaseUrl(
+    workerForwarder?.getListenerServerUrl() ||
+    process.env.LISTENER_PUBLIC_BASE_URL ||
+    process.env.LISTENER_SERVER_URL
+  );
+  const videoBaseUrl = normalizeBaseUrl(
+    workerForwarder?.getVideoWorkerUrl() ||
+    process.env.VIDEO_PUBLIC_BASE_URL ||
+    process.env.VIDEO_WORKER_URL
+  );
+  const alertBaseUrl = normalizeBaseUrl(
+    workerForwarder?.getAlertWorkerUrl() ||
+    process.env.ALERT_PUBLIC_BASE_URL ||
+    process.env.PUBLIC_SERVER_URL
+  );
+  const absoluteApiUrl = (apiPath: string, preferredBaseUrl?: string) => {
+    const pathValue = String(apiPath || '').trim();
+    if (!pathValue) return pathValue;
+    if (/^https?:\/\//i.test(pathValue)) return pathValue;
+    const baseUrl = normalizeBaseUrl(preferredBaseUrl) || alertBaseUrl;
+    if (!baseUrl) return pathValue;
+    return `${baseUrl}${pathValue.startsWith('/') ? pathValue : `/${pathValue}`}`;
+  };
+  const shouldProxyListenerCommands = !ingressEnabled && !!listenerBaseUrl && !!workerForwarder;
+  const alertLocalTimestamp = (value: Date | string | null | undefined) => {
+    if (!value) return null;
+    const dt = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(dt.getTime())) return null;
+    const formatter = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'Africa/Johannesburg',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23'
+    });
+    return formatter.format(dt).replace(' ', 'T') + '+02:00';
+  };
   const queuedAlertWindows = new Set<string>();
   const alertEnsureState = new Map<string, number>();
   const ALERT_ENSURE_COOLDOWN_MS = Math.max(5000, Number(process.env.ALERT_MEDIA_ENSURE_COOLDOWN_MS || 10000));
@@ -91,15 +141,19 @@ export function createRoutes(
 
     if (ensureScreenshots) {
       for (const ch of channels) {
-        screenshotRequests.push(
-          tcpServer.requestScreenshotWithFallback(vehicleId, ch, {
-            fallback: true,
-            fallbackDelayMs: 600,
-            alertId,
-            captureVideoEvidence: true,
-            videoDurationSec: 8
-          })
-        );
+        if (shouldProxyListenerCommands && workerForwarder) {
+          screenshotRequests.push(workerForwarder.requestScreenshot(vehicleId, ch, alertId));
+        } else {
+          screenshotRequests.push(
+            tcpServer.requestScreenshotWithFallback(vehicleId, ch, {
+              fallback: true,
+              fallbackDelayMs: 600,
+              alertId,
+              captureVideoEvidence: true,
+              videoDurationSec: 8
+            })
+          );
+        }
       }
     }
 
@@ -108,11 +162,16 @@ export function createRoutes(
       const start = new Date(alertTimestamp.getTime() - 30 * 1000);
       const end = new Date(alertTimestamp.getTime() + 30 * 1000);
       for (const ch of channels) {
-        const scheduled = tcpServer.scheduleCameraReportRequests(vehicleId, ch, start, end, {
-          queryResources: true,
-          requestDownload: false
-        });
-        videoScheduled = videoScheduled || scheduled.requested || scheduled.queued;
+        if (shouldProxyListenerCommands && workerForwarder) {
+          screenshotRequests.push(workerForwarder.requestCameraVideo(vehicleId, ch, start, end, alertId));
+          videoScheduled = true;
+        } else {
+          const scheduled = tcpServer.scheduleCameraReportRequests(vehicleId, ch, start, end, {
+            queryResources: true,
+            requestDownload: false
+          });
+          videoScheduled = videoScheduled || scheduled.requested || scheduled.queued;
+        }
       }
     }
 
@@ -338,21 +397,27 @@ export function createRoutes(
   const normalizePublicVideoUrl = (value: any, fallback: string) => {
     const s = String(value || '').trim();
     if (s && /^https?:\/\//i.test(s)) return s;
-    if (s && s.startsWith('/api/')) return s;
-    return fallback;
+    if (s && s.startsWith('/api/')) return absoluteApiUrl(s, videoBaseUrl);
+    return absoluteApiUrl(fallback, videoBaseUrl);
   };
-  const buildStoredVideoUrl = (videoId: string) => `/api/videos/${encodeURIComponent(String(videoId))}/file`;
+  const buildStoredVideoUrl = (videoId: string) => absoluteApiUrl(
+    `/api/videos/${encodeURIComponent(String(videoId))}/file`,
+    videoBaseUrl
+  );
   const normalizePublicImageUrl = (img: any) => {
     const raw = String(img?.storage_url || '').trim();
     if (raw && /^https?:\/\//i.test(raw)) return raw;
-    if (raw && raw.startsWith('/api/')) return raw;
-    if (img?.id) return `/api/images/${encodeURIComponent(String(img.id))}/file`;
+    if (raw && raw.startsWith('/api/')) return absoluteApiUrl(raw, listenerBaseUrl);
+    if (img?.id) return absoluteApiUrl(`/api/images/${encodeURIComponent(String(img.id))}/file`, listenerBaseUrl);
     return '';
   };
   const transcodeCache = new Map<string, Promise<string>>();
 
   const buildStreamUrl = (vehicleId: string, channel: number) =>
-    `/api/stream/${encodeURIComponent(String(vehicleId))}/${encodeURIComponent(String(channel))}/playlist.m3u8`;
+    absoluteApiUrl(
+      `/api/stream/${encodeURIComponent(String(vehicleId))}/${encodeURIComponent(String(channel))}/playlist.m3u8`,
+      videoBaseUrl
+    );
 
   const startLiveStreamForVehicle = (vehicleId: string, channel: number): boolean => {
     try {
@@ -665,18 +730,25 @@ export function createRoutes(
     return task;
   };
   const resolveAlertClipSource = (videoClips: any, type: 'pre' | 'post' | 'camera') => {
+    const preferRemoteSource = !envFlag('VIDEO_PROCESSING_ENABLED', true) && !!videoBaseUrl;
     if (type === 'pre') {
-      // Prefer local raw clip path so we can transcode to browser-playable MP4.
-      return String(videoClips?.pre || videoClips?.preStorageUrl || '').trim();
+      return String(
+        preferRemoteSource
+          ? (videoClips?.preStorageUrl || videoClips?.pre || '')
+          : (videoClips?.pre || videoClips?.preStorageUrl || '')
+      ).trim();
     }
     if (type === 'post') {
-      // Prefer local raw clip path so we can transcode to browser-playable MP4.
-      return String(videoClips?.post || videoClips?.postStorageUrl || '').trim();
+      return String(
+        preferRemoteSource
+          ? (videoClips?.postStorageUrl || videoClips?.post || '')
+          : (videoClips?.post || videoClips?.postStorageUrl || '')
+      ).trim();
     }
     return String(
-      videoClips?.cameraVideoLocalPath ||
-      videoClips?.cameraVideo ||
-      ''
+      preferRemoteSource
+        ? (videoClips?.cameraVideo || videoClips?.cameraVideoLocalPath || '')
+        : (videoClips?.cameraVideoLocalPath || videoClips?.cameraVideo || '')
     ).trim();
   };
   const getAlertClipFpsHint = (videoClips: any, type: 'pre' | 'post' | 'camera') => {
@@ -706,7 +778,7 @@ export function createRoutes(
     const outputDir = path.join(process.cwd(), 'recordings', vehicleId, 'manual');
     const outputName = `${id}_ch${channel}.mp4`;
     const outputPath = path.join(outputDir, outputName);
-    const outputUrl = `/api/videos/jobs/${encodeURIComponent(id)}/file`;
+    const outputUrl = absoluteApiUrl(`/api/videos/jobs/${encodeURIComponent(id)}/file`, videoBaseUrl);
     const job = {
       id,
       vehicleId,
@@ -820,7 +892,7 @@ export function createRoutes(
     const outputDir = path.join(process.cwd(), 'recordings', vehicleId, 'manual');
     const outputName = `${id}_ch${channel}.mp4`;
     const outputPath = path.join(outputDir, outputName);
-    const outputUrl = `/api/videos/jobs/${encodeURIComponent(id)}/file`;
+    const outputUrl = absoluteApiUrl(`/api/videos/jobs/${encodeURIComponent(id)}/file`, videoBaseUrl);
     const job = {
       id,
       vehicleId,
@@ -1100,7 +1172,7 @@ export function createRoutes(
         metadata.videoClips = metadata.videoClips || {};
         const normalized = normalizePublicVideoUrl(
           persistedUrl,
-          `/api/videos/jobs/${encodeURIComponent(job.id)}/file`
+          absoluteApiUrl(`/api/videos/jobs/${encodeURIComponent(job.id)}/file`, videoBaseUrl)
         );
         if (job.windowType === 'pre') {
           metadata.videoClips.cameraPreVideo = normalized;
@@ -1682,22 +1754,27 @@ export function createRoutes(
         params.push(priority);
       }
       params.push(Math.max(limit * 5, 50));
-      const dbResult = await require('../storage/database').query(
-        `SELECT id, device_id, channel, alert_type, priority, status, timestamp, latitude, longitude, metadata
-         FROM alerts
-         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-         ORDER BY timestamp DESC
-         LIMIT $${p}`,
-        params
-      );
-      const dbAlerts = dbResult.rows.map((r: any) => normalizeAlertRecord(r));
+      let dbAlerts: any[] = [];
+      try {
+        const dbResult = await require('../storage/database').query(
+          `SELECT id, device_id, channel, alert_type, priority, status, timestamp, latitude, longitude, metadata
+           FROM alerts
+           ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+           ORDER BY timestamp DESC
+           LIMIT $${p}`,
+          params
+        );
+        dbAlerts = dbResult.rows.map((r: any) => normalizeAlertRecord(r));
+      } catch (dbError: any) {
+        console.error('alerts route DB query failed, falling back to memory alerts:', dbError?.message || dbError);
+      }
 
       const alerts = mergeRecentAlerts([memAlerts, dbAlerts], limit).map(withAlertMediaLinks);
       res.json({
         success: true,
         alerts,
         count: alerts.length,
-        source: 'merged',
+        source: dbAlerts.length > 0 ? 'merged' : 'memory_fallback',
         window_minutes: minutes
       });
     } catch (error) {
@@ -2440,6 +2517,7 @@ export function createRoutes(
           vehicleId: img.device_id,
           channel: Number(img.channel || 1),
           timestamp: img.timestamp,
+          timestampLocal: alertLocalTimestamp(img.timestamp),
           fileSize: Number(img.file_size || 0),
           url: normalizePublicImageUrl(img),
           offsetSeconds: Number.isNaN(ts.getTime())
@@ -2460,6 +2538,7 @@ export function createRoutes(
         channel: Number(v.channel || 1),
         type: v.video_type,
         timestamp: v.start_time,
+        timestampLocal: alertLocalTimestamp(v.start_time),
         duration: Number(v.duration_seconds || 0),
         fileSize: Number(v.file_size || 0),
         filePath: v.file_path,
@@ -2477,6 +2556,7 @@ export function createRoutes(
             priority: row.priority,
             status: row.status,
             timestamp: row.timestamp,
+            timestampLocal: alertLocalTimestamp(row.timestamp),
             metadata
           }),
           screenshots,
@@ -3233,10 +3313,13 @@ export function createRoutes(
             const activeChannelRows = rows.filter((row: any) => Number(row?.channel || channel) === channel);
             const segmentRows = activeChannelRows.length ? activeChannelRows : rows;
             if (segmentRows.length > 0) {
+              if (!envFlag('VIDEO_PROCESSING_ENABLED', true) && videoBaseUrl) {
+                return res.redirect(buildStoredVideoUrl(String(segmentRows[0]?.id || '')));
+              }
               const job = buildStoredWindowVideoJob(rawVehicle, channel, fallbackStart, fallbackEnd, segmentRows, {
                 alertId: id
               });
-              return res.redirect(`/api/videos/jobs/${encodeURIComponent(job.id)}/file`);
+              return res.redirect(absoluteApiUrl(`/api/videos/jobs/${encodeURIComponent(job.id)}/file`, videoBaseUrl));
             }
           } catch (fallbackErr) {
             console.error(`Failed fallback local window for alert ${id} ${type}:`, fallbackErr);
@@ -3487,6 +3570,7 @@ export function createRoutes(
         channel: alert.channel,
         alert_type: alert.alert_type,
         timestamp: alert.timestamp,
+        timestamp_local: alertLocalTimestamp(alert.timestamp),
         media_links: buildAlertMediaLinks(id),
         default_source: defaultSource,
         preferred_source: preferredSource,
@@ -3543,6 +3627,8 @@ export function createRoutes(
           // From videos table (database records)
           database_records: videosResult.rows.map((v: any) => ({
             ...v,
+            start_time_local: alertLocalTimestamp(v.start_time),
+            end_time_local: alertLocalTimestamp(v.end_time),
             url: normalizePublicVideoUrl(v.storage_url || v.file_path, buildStoredVideoUrl(v.id))
           }))
         },
@@ -3618,9 +3704,14 @@ export function createRoutes(
         const rows = await queryStoredVideoSegments(vehicleId, ch, fallbackStart, fallbackEnd);
         const segmentRows = rows.filter((row: any) => Number(row?.channel || ch) === ch);
         if (segmentRows.length > 0) {
-          const storageJob = buildStoredWindowVideoJob(vehicleId, ch, startTime, endTime, segmentRows, {
-            alertId: id
-          });
+          const storageJob = !envFlag('VIDEO_PROCESSING_ENABLED', true) && videoBaseUrl
+            ? {
+                id: String(segmentRows[0]?.id || ''),
+                outputUrl: buildStoredVideoUrl(String(segmentRows[0]?.id || ''))
+              }
+            : buildStoredWindowVideoJob(vehicleId, ch, startTime, endTime, segmentRows, {
+                alertId: id
+              });
           return {
             channel: ch,
             storageAvailable: true,
@@ -3635,10 +3726,20 @@ export function createRoutes(
           };
         }
 
-        const scheduled = tcpServer.scheduleCameraReportRequests(vehicleId, ch, startTime, endTime, {
-          queryResources,
-          requestDownload
-        });
+        const scheduled = shouldProxyListenerCommands && workerForwarder
+          ? (() => {
+              void workerForwarder.requestCameraVideo(vehicleId!, ch, startTime, endTime, id);
+              return {
+                querySent: queryResources,
+                requested: true,
+                queued: false,
+                downloadSent: false
+              };
+            })()
+          : tcpServer.scheduleCameraReportRequests(vehicleId, ch, startTime, endTime, {
+              queryResources,
+              requestDownload
+            });
         const manualCaptureJob = scheduled.requested
           ? buildManualVideoJob(vehicleId!, ch, startTime, endTime, { alertId: id })
           : null;
@@ -3744,7 +3845,9 @@ export function createRoutes(
             requestDownload,
             downloadRequestSent: false,
             playbackJobId: manualCaptureJob?.id || null,
-            playbackJobUrl: manualCaptureJob ? `/api/videos/jobs/${encodeURIComponent(manualCaptureJob.id)}/file` : null
+            playbackJobUrl: manualCaptureJob
+              ? absoluteApiUrl(`/api/videos/jobs/${encodeURIComponent(manualCaptureJob.id)}/file`, videoBaseUrl)
+              : null
           }
         });
       }
@@ -3795,7 +3898,9 @@ export function createRoutes(
           downloadRequestSent: downloadRequested,
           playbackSource: requested || queued || manualCaptureJob ? 'manual_capture' : 'pending',
           playbackJobId: manualCaptureJob?.id || null,
-          playbackJobUrl: manualCaptureJob ? `/api/videos/jobs/${encodeURIComponent(manualCaptureJob.id)}/file` : null
+          playbackJobUrl: manualCaptureJob
+            ? absoluteApiUrl(`/api/videos/jobs/${encodeURIComponent(manualCaptureJob.id)}/file`, videoBaseUrl)
+            : null
         }
       });
     } catch (error: any) {
@@ -3902,7 +4007,7 @@ export function createRoutes(
     if (recordPlayback && streamRequestSent) {
       const job = buildManualVideoJob(id, ch, start, end);
       playbackJobId = job.id;
-      playbackJobUrl = `/api/videos/jobs/${encodeURIComponent(job.id)}/file`;
+      playbackJobUrl = absoluteApiUrl(`/api/videos/jobs/${encodeURIComponent(job.id)}/file`, videoBaseUrl);
     }
 
     const anySent = streamRequestSent || downloadRequestSent || querySent;
@@ -4312,7 +4417,7 @@ export function createRoutes(
           startTime: start.toISOString(),
           endTime: end.toISOString(),
           playbackJobId: job.id,
-          playbackJobUrl: `/api/videos/jobs/${encodeURIComponent(job.id)}/file`,
+          playbackJobUrl: absoluteApiUrl(`/api/videos/jobs/${encodeURIComponent(job.id)}/file`, videoBaseUrl),
           outputUrl: job.outputUrl,
           sourceSegments: rows.length
         }
