@@ -4375,7 +4375,42 @@ export function createRoutes(
         [id, ch, end, start]
       );
 
-      const rows = (result.rows || []).filter((row: any) => String(row?.file_path || '').trim());
+      let rows = (result.rows || []).filter((row: any) => String(row?.file_path || '').trim());
+      let resolvedChannel = ch;
+
+      if (rows.length === 0) {
+        const anyChannelResult = await db.query(
+          `SELECT id, file_path, start_time, end_time, duration_seconds, frame_count, alert_id, channel
+           FROM videos
+           WHERE device_id = $1
+             AND start_time <= $2
+             AND COALESCE(end_time, start_time) >= $3
+           ORDER BY channel ASC, start_time ASC`,
+          [id, end, start]
+        );
+
+        const candidateRows = (anyChannelResult.rows || []).filter((row: any) => String(row?.file_path || '').trim());
+        if (candidateRows.length > 0) {
+          const grouped = new Map<number, any[]>();
+          for (const row of candidateRows) {
+            const rowChannel = Number(row?.channel || 1) || 1;
+            const list = grouped.get(rowChannel) || [];
+            list.push(row);
+            grouped.set(rowChannel, list);
+          }
+
+          const bestMatch = [...grouped.entries()].sort((a, b) => {
+            if (b[1].length !== a[1].length) return b[1].length - a[1].length;
+            return a[0] - b[0];
+          })[0];
+
+          if (bestMatch) {
+            resolvedChannel = bestMatch[0];
+            rows = bestMatch[1];
+          }
+        }
+      }
+
       if (rows.length === 0) {
         const vehicle = tcpServer.getVehicle(id);
         const requestedChannel = Number(ch) || 1;
@@ -4404,16 +4439,17 @@ export function createRoutes(
         });
       }
 
-      const job = buildStoredWindowVideoJob(id, ch, start, end, rows, {
+      const job = buildStoredWindowVideoJob(id, resolvedChannel, start, end, rows, {
         alertId: String(alertId || '').trim() || undefined
       });
 
       return res.json({
         success: true,
-        message: `Stored video window job queued for ${id} channel ${ch}`,
+        message: `Stored video window job queued for ${id} channel ${resolvedChannel}`,
         data: {
           vehicleId: id,
-          channel: ch,
+          requestedChannel: ch,
+          channel: resolvedChannel,
           startTime: start.toISOString(),
           endTime: end.toISOString(),
           playbackJobId: job.id,
