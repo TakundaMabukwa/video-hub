@@ -91,6 +91,37 @@ export function createInternalRoutes(
     }
   });
 
+  router.post('/ingest/rtp-batch', (req, res) => {
+    try {
+      const packets = Array.isArray(req.body?.packets) ? req.body.packets : [];
+      if (packets.length === 0) {
+        return res.status(400).json({ success: false, message: 'Missing packets' });
+      }
+
+      let accepted = 0;
+      for (const entry of packets) {
+        const vehicleId = String(entry?.vehicleId || '').trim();
+        const packetBase64 = String(entry?.packetBase64 || '').trim();
+        if (!vehicleId || !packetBase64) continue;
+        const packet = Buffer.from(packetBase64, 'base64');
+        rtpHandler.handleRTPPacket(packet, vehicleId);
+        accepted += 1;
+      }
+
+      if (accepted === 0) {
+        return res.status(400).json({ success: false, message: 'No valid RTP packets in batch' });
+      }
+
+      return res.json({ success: true, accepted });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to ingest RTP batch',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
   router.post('/commands/request-screenshot', async (req, res) => {
     try {
       if (!tcpServer) {
