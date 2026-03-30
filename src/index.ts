@@ -151,13 +151,17 @@ const ALERT_PROCESSING_ENABLED = envFlag('ALERT_PROCESSING_ENABLED', true);
 const VIDEO_PROCESSING_ENABLED = envFlag('VIDEO_PROCESSING_ENABLED', true);
 const DB_ENABLED = envFlag('DB_ENABLED', ALERT_PROCESSING_ENABLED);
 const SHOULD_USE_DB = DB_ENABLED;
-const BACKGROUND_STREAMS_ENABLED = envFlag('BACKGROUND_STREAMS_ENABLED', VIDEO_PROCESSING_ENABLED);
-const KEEP_STREAMS_WITHOUT_CLIENTS = envFlag(
-  'KEEP_STREAMS_WITHOUT_CLIENTS',
-  BACKGROUND_STREAMS_ENABLED
-);
+const BACKGROUND_STREAMS_ENABLED = VIDEO_PROCESSING_ENABLED;
+const KEEP_STREAMS_WITHOUT_CLIENTS = VIDEO_PROCESSING_ENABLED;
 const AUTO_SCREENSHOT_FANOUT_ENABLED = envFlag('AUTO_SCREENSHOT_FANOUT_ENABLED', false);
-const BACKGROUND_STREAM_INTERVAL_MS = parseInt(process.env.BACKGROUND_STREAM_INTERVAL_MS || '45000');
+const BACKGROUND_STREAM_INTERVAL_MS = parseInt(process.env.BACKGROUND_STREAM_INTERVAL_MS || '15000');
+const BACKGROUND_STREAM_STALE_MS = parseInt(process.env.BACKGROUND_STREAM_STALE_MS || '30000');
+const BACKGROUND_STREAM_DEFAULT_CHANNELS = String(
+  process.env.BACKGROUND_STREAM_DEFAULT_CHANNELS || '1,2,3,4'
+)
+  .split(',')
+  .map((value) => Number(String(value || '').trim()))
+  .filter((value, index, arr) => Number.isFinite(value) && value > 0 && arr.indexOf(value) === index);
 const ALERT_WORKER_URL = process.env.ALERT_WORKER_URL || '';
 const VIDEO_WORKER_URL = process.env.VIDEO_WORKER_URL || '';
 const LISTENER_SERVER_URL = process.env.LISTENER_SERVER_URL || '';
@@ -471,18 +475,40 @@ async function startServer() {
   });
 
   // Keep camera streams alive in backend mode (independent of UI subscribers).
+  const getBackgroundChannels = (vehicle: any) => {
+    const fromCapabilities = (vehicle.channels || [])
+      .filter((ch: any) => ch.type === 'video' || ch.type === 'audio_video')
+      .map((ch: any) => Number(ch.logicalChannel))
+      .filter((ch: number) => Number.isFinite(ch) && ch > 0);
+
+    return [...new Set(fromCapabilities.length ? fromCapabilities : BACKGROUND_STREAM_DEFAULT_CHANNELS)];
+  };
+
   const ensureBackgroundStreams = () => {
     if (!BACKGROUND_STREAMS_ENABLED) return;
     const connected = tcpServer.getVehicles().filter(v => v.connected);
     for (const v of connected) {
-      const fromCapabilities = (v.channels || [])
-        .filter(ch => ch.type === 'video' || ch.type === 'audio_video')
-        .map(ch => Number(ch.logicalChannel))
-        .filter(ch => Number.isFinite(ch) && ch > 0);
-
-      const channels = [...new Set(fromCapabilities.length ? fromCapabilities : [1, 2])];
+      const channels = getBackgroundChannels(v);
       for (const channel of channels) {
         tcpServer.startVideo(String(v.id), channel);
+      }
+    }
+  };
+
+  const ensureFreshBackgroundStreams = () => {
+    if (!BACKGROUND_STREAMS_ENABLED) return;
+    const connected = tcpServer.getVehicles().filter(v => v.connected);
+    const now = Date.now();
+
+    for (const v of connected) {
+      const channels = getBackgroundChannels(v);
+      for (const channel of channels) {
+        const streamInfo = udpServer.getStreamInfo(String(v.id), channel);
+        const lastFrameAt = streamInfo?.lastFrame ? new Date(streamInfo.lastFrame).getTime() : 0;
+        const hasFreshFrames = !!lastFrameAt && Number.isFinite(lastFrameAt) && now - lastFrameAt <= BACKGROUND_STREAM_STALE_MS;
+        if (!streamInfo?.active || !hasFreshFrames) {
+          tcpServer.startVideo(String(v.id), channel);
+        }
       }
     }
   };
@@ -535,6 +561,7 @@ async function startServer() {
   if (BACKGROUND_STREAMS_ENABLED || AUTO_SCREENSHOT_FANOUT_ENABLED) {
     setTimeout(() => {
       ensureBackgroundStreams();
+      ensureFreshBackgroundStreams();
       void runAutoScreenshotFanout();
     }, 5000);
   }
@@ -542,6 +569,7 @@ async function startServer() {
   if (BACKGROUND_STREAMS_ENABLED) {
     setInterval(() => {
       ensureBackgroundStreams();
+      ensureFreshBackgroundStreams();
     }, BACKGROUND_STREAM_INTERVAL_MS);
   }
 

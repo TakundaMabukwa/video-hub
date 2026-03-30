@@ -20,8 +20,8 @@ export class RetentionService {
   private readonly keepManualDays = Math.max(0, Number(process.env.RETENTION_MANUAL_DAYS || 2));
   private readonly keepEvidenceDays = Math.max(0, Number(process.env.RETENTION_EVIDENCE_DAYS || 2));
   private readonly keepTranscodedDays = Math.max(0, Number(process.env.RETENTION_TRANSCODED_DAYS || 2));
-  private readonly keepHlsHours = Math.max(1, Number(process.env.RETENTION_HLS_HOURS || 2));
-  private readonly keepLiveHours = Math.max(1, Number(process.env.RETENTION_LIVE_HOURS || 12));
+  private readonly keepHlsHours = Math.max(1, Number(process.env.RETENTION_HLS_HOURS || 72));
+  private readonly keepLiveHours = Math.max(1, Number(process.env.RETENTION_LIVE_HOURS || 72));
   private readonly keepRawLogHours = Math.max(1, Number(process.env.RETENTION_RAW_LOG_HOURS || 24));
 
   start(): void {

@@ -3939,7 +3939,7 @@ export function createRoutes(
       channel = 1,
       startTime,
       endTime,
-      mode = 'both',
+      mode = 'stream',
       queryResources = true,
       recordPlayback = true
     } = req.body || {};
