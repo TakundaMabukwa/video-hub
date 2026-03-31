@@ -66,8 +66,30 @@ export class VideoStorage {
     );
   }
 
-  async updateVideoEnd(id: string, endTime: Date, fileSize: number, duration: number, frameCount?: number) {
-    await this.updateVideoProgress(id, endTime, fileSize, duration, frameCount);
+  async updateVideoEnd(
+    id: string,
+    endTime: Date,
+    fileSize: number,
+    duration: number,
+    frameCount?: number,
+    filePath?: string
+  ) {
+    if (!this.dbEnabled) return;
+    await query(
+      `UPDATE videos
+       SET end_time = $1,
+           file_size = GREATEST(COALESCE(file_size, 0), $2),
+           duration_seconds = GREATEST(COALESCE(duration_seconds, 0), $3),
+           frame_count = GREATEST(COALESCE(frame_count, 0), $4),
+           file_path = COALESCE($5, file_path)
+       WHERE id = $6`,
+      [endTime, fileSize, duration, Math.max(0, Number(frameCount || 0)), filePath || null, id]
+    );
+  }
+
+  async deleteVideo(id: string) {
+    if (!this.dbEnabled) return;
+    await query(`DELETE FROM videos WHERE id = $1`, [id]);
   }
 
   async uploadVideoToSupabase(id: string, localPath: string, deviceId: string, channel: number): Promise<string> {

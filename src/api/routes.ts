@@ -433,10 +433,12 @@ export function createRoutes(
   const queryStoredVideoSegments = async (vehicleId: string, channel: number, start: Date, end: Date) => {
     const db = require('../storage/database');
     const result = await db.query(
-      `SELECT id, file_path, start_time, end_time, duration_seconds, frame_count, alert_id
+      `SELECT id, file_path, start_time, end_time, duration_seconds, frame_count, alert_id, file_size
        FROM videos
        WHERE device_id = $1
          AND channel = $2
+         AND COALESCE(file_size, 0) > 0
+         AND file_path NOT LIKE '%%.partial.%%'
          AND start_time <= $3
          AND COALESCE(end_time, start_time) >= $4
        ORDER BY start_time ASC`,
@@ -475,6 +477,7 @@ export function createRoutes(
         const fileChannel = Number(channelMatch[1] || 0);
         if (fileChannel !== channel) return null;
         if (/\.playable\.mp4$/i.test(entry.name)) return null;
+        if (/\.partial\./i.test(entry.name)) return null;
 
         const startedAt = parseRecordingStartFromFilename(entry.name);
         if (!startedAt) return null;
@@ -487,6 +490,7 @@ export function createRoutes(
           return null;
         }
 
+        if (stat.size <= 0) return null;
         const endedAt = stat.mtimeMs > startedAt.getTime() ? new Date(stat.mtimeMs) : startedAt;
         if (startedAt > end || endedAt < start) return null;
 
@@ -4365,9 +4369,11 @@ export function createRoutes(
     try {
       const db = require('../storage/database');
       const result = await db.query(
-        `SELECT id, device_id, channel, video_type, start_time, end_time, duration_seconds, file_size
+        `SELECT id, device_id, channel, video_type, start_time, end_time, duration_seconds, file_size, file_path
          FROM videos
          WHERE device_id = $1
+           AND COALESCE(file_size, 0) > 0
+           AND file_path NOT LIKE '%%.partial.%%'
            AND start_time < $3
            AND COALESCE(end_time, start_time) >= $2
          ORDER BY channel ASC, start_time ASC`,
@@ -4463,6 +4469,8 @@ export function createRoutes(
                start_time, end_time, duration_seconds, created_at, alert_id
         FROM videos
         WHERE device_id = $1
+          AND COALESCE(file_size, 0) > 0
+          AND file_path NOT LIKE '%%.partial.%%'
           AND start_time <= $3
           AND COALESCE(end_time, start_time) >= $2`;
       if (ch > 0) {
@@ -4586,9 +4594,11 @@ export function createRoutes(
 
       if (rows.length === 0) {
         const anyChannelResult = await db.query(
-          `SELECT id, file_path, start_time, end_time, duration_seconds, frame_count, alert_id, channel
+          `SELECT id, file_path, start_time, end_time, duration_seconds, frame_count, alert_id, channel, file_size
            FROM videos
            WHERE device_id = $1
+             AND COALESCE(file_size, 0) > 0
+             AND file_path NOT LIKE '%%.partial.%%'
              AND start_time <= $2
              AND COALESCE(end_time, start_time) >= $3
            ORDER BY channel ASC, start_time ASC`,

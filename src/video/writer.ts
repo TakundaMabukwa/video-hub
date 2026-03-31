@@ -17,6 +17,7 @@ export class VideoWriter {
   private readonly segmentDurationMs = Math.max(10_000, Number(process.env.LIVE_SEGMENT_SECONDS || 60) * 1000);
   private readonly progressUpdateMs = Math.max(1000, Number(process.env.VIDEO_PROGRESS_UPDATE_MS || 5000));
   private readonly rotationCheckMs = Math.max(2_000, Math.min(10_000, Number(process.env.VIDEO_ROTATION_CHECK_MS || Math.floor(this.segmentDurationMs / 2))));
+  private readonly minValidSegmentBytes = Math.max(64 * 1024, Number(process.env.MIN_VALID_SEGMENT_BYTES || 256 * 1024));
   private pendingTranscodes = new Set<string>();
   private readonly rotationTimer: NodeJS.Timeout;
 
@@ -114,6 +115,52 @@ export class VideoWriter {
       });
   }
 
+  private buildFinalizedPath(filepath: string): string {
+    return filepath.replace(/\.partial(?=\.[^.]+$)/i, '');
+  }
+
+  private async validateRecordedSegment(filepath: string): Promise<boolean> {
+    try {
+      if (!filepath || !fs.existsSync(filepath)) return false;
+      const stat = fs.statSync(filepath);
+      if (!stat.isFile() || stat.size < this.minValidSegmentBytes) return false;
+    } catch {
+      return false;
+    }
+
+    const isMp4 = /\.mp4$/i.test(filepath);
+    const args = isMp4
+      ? ['-hide_banner', '-loglevel', 'error', '-y', '-i', filepath, '-frames:v', '1', '-f', 'null', '-']
+      : [
+          '-hide_banner', '-loglevel', 'error', '-y',
+          '-fflags', '+genpts',
+          '-r', String(Number(process.env.VIDEO_DEFAULT_INPUT_FPS || 25) || 25),
+          '-f', 'h264',
+          '-i', filepath,
+          '-frames:v', '1',
+          '-f', 'null',
+          '-'
+        ];
+
+    return await new Promise<boolean>((resolve) => {
+      const proc = spawn(this.getFfmpegBinary(), args, { stdio: ['ignore', 'ignore', 'pipe'] });
+      let stderr = '';
+      const timeout = setTimeout(() => {
+        try { proc.kill('SIGKILL'); } catch {}
+        resolve(false);
+      }, 12000);
+      proc.stderr.on('data', (d) => { stderr += String(d || ''); });
+      proc.on('error', () => {
+        clearTimeout(timeout);
+        resolve(false);
+      });
+      proc.on('close', (code) => {
+        clearTimeout(timeout);
+        resolve(code === 0 && !/does not contain any stream/i.test(stderr));
+      });
+    });
+  }
+
   writeFrame(vehicleId: string, channel: number, frameData: Buffer): void {
     const streamKey = `${vehicleId}_${channel}`;
     
@@ -155,7 +202,7 @@ export class VideoWriter {
 
     const startedAt = new Date();
     const timestamp = startedAt.toISOString().replace(/[:.]/g, '-');
-    const filename = `channel_${channel}_${timestamp}.h264`;
+    const filename = `channel_${channel}_${timestamp}.partial.h264`;
     const filepath = path.join(recordingsDir, filename);
     
     const stream = fs.createWriteStream(filepath);
@@ -225,11 +272,30 @@ export class VideoWriter {
           const duration = Math.max(1, Math.floor((endTime.getTime() - startTime.getTime()) / 1000));
           try {
             const sizeFromCounter = this.bytesWritten.get(streamKey) || 0;
-            const stats = fs.existsSync(filepath) ? fs.statSync(filepath) : null;
+            const finalizedPath = this.buildFinalizedPath(filepath);
+            if (fs.existsSync(filepath) && finalizedPath !== filepath) {
+              try {
+                fs.renameSync(filepath, finalizedPath);
+              } catch (renameError) {
+                console.error(`Failed to finalize segment ${filepath}:`, renameError);
+              }
+            }
+            const usablePath = fs.existsSync(finalizedPath) ? finalizedPath : filepath;
+            const stats = fs.existsSync(usablePath) ? fs.statSync(usablePath) : null;
             const finalSize = Math.max(sizeFromCounter, stats?.size || 0);
             const frameCount = Math.max(0, this.frameCounters.get(streamKey) || 0);
-            this.videoStorage.updateVideoEnd(videoId, endTime, finalSize, duration, frameCount).catch(console.error);
-            this.kickoffPlayableTranscode(filepath);
+            this.validateRecordedSegment(usablePath)
+              .then((valid) => {
+                if (!valid) {
+                  try { if (fs.existsSync(usablePath)) fs.unlinkSync(usablePath); } catch {}
+                  return this.videoStorage.deleteVideo(videoId);
+                }
+                this.kickoffPlayableTranscode(usablePath);
+                return this.videoStorage.updateVideoEnd(videoId, endTime, finalSize, duration, frameCount, usablePath);
+              })
+              .catch((err) => {
+                console.error(`Failed to finalize validated segment ${usablePath}:`, err);
+              });
           } catch (error) {
             console.error('Failed to update video metadata:', error);
           }
