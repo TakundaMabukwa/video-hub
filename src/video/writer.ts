@@ -16,11 +16,17 @@ export class VideoWriter {
   private lastPersistTimes = new Map<string, number>();
   private readonly segmentDurationMs = Math.max(10_000, Number(process.env.LIVE_SEGMENT_SECONDS || 60) * 1000);
   private readonly progressUpdateMs = Math.max(1000, Number(process.env.VIDEO_PROGRESS_UPDATE_MS || 5000));
+  private readonly rotationCheckMs = Math.max(2_000, Math.min(10_000, Number(process.env.VIDEO_ROTATION_CHECK_MS || Math.floor(this.segmentDurationMs / 2))));
   private pendingTranscodes = new Set<string>();
+  private readonly rotationTimer: NodeJS.Timeout;
 
   constructor() {
     VideoWriter.activeInstances.add(this);
     this.registerShutdownHooks();
+    this.rotationTimer = setInterval(() => {
+      this.rotateExpiredSegments();
+    }, this.rotationCheckMs);
+    this.rotationTimer.unref?.();
   }
 
   private registerShutdownHooks(): void {
@@ -247,12 +253,30 @@ export class VideoWriter {
     this.createOutputStream(vehicleId, channel, streamKey);
   }
 
+  private rotateExpiredSegments(): void {
+    const now = Date.now();
+    for (const streamKey of this.fileStreams.keys()) {
+      const startTime = this.startTimes.get(streamKey);
+      if (!startTime) continue;
+      if (now - startTime.getTime() < this.segmentDurationMs) continue;
+
+      const separator = streamKey.lastIndexOf('_');
+      if (separator <= 0) continue;
+      const vehicleId = streamKey.slice(0, separator);
+      const channel = Number(streamKey.slice(separator + 1));
+      if (!vehicleId || !Number.isFinite(channel)) continue;
+
+      this.rotateSegment(vehicleId, channel, streamKey);
+    }
+  }
+
   stopRecording(vehicleId: string, channel: number): void {
     const streamKey = `${vehicleId}_${channel}`;
     this.finalizeSegment(streamKey, vehicleId, channel);
   }
 
   stopAllRecordings(): void {
+    clearInterval(this.rotationTimer);
     for (const [streamKey] of this.fileStreams.entries()) {
       const [vehicleId, channelStr] = streamKey.split('_');
       this.finalizeSegment(streamKey, vehicleId, Number(channelStr || 1));
@@ -261,6 +285,7 @@ export class VideoWriter {
     this.fileStreams.clear();
     this.frameCounters.clear();
     this.filePaths.clear();
+    VideoWriter.activeInstances.delete(this);
   }
 
   getRecordingStats(): { activeRecordings: number; totalFrames: number } {

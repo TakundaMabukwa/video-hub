@@ -674,7 +674,21 @@ export function createRoutes(
     } catch {}
     return 'ffmpeg';
   };
-  const runFfmpegProfiles = async (profiles: string[][], outputPath: string) => {
+  const getOutputFileSize = (outputPath: string) => {
+    try {
+      return fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
+    } catch {
+      return 0;
+    }
+  };
+  const runFfmpegProfiles = async (
+    profiles: string[][],
+    outputPath: string,
+    options?: {
+      minBytes?: number;
+    }
+  ) => {
+    const minBytes = Math.max(1, Number(options?.minBytes || 1));
     let lastError = 'ffmpeg failed';
     for (const args of profiles) {
       try {
@@ -684,13 +698,18 @@ export function createRoutes(
           ffmpeg.stderr.on('data', (d) => { stderr += String(d || ''); });
           ffmpeg.on('error', (err) => reject(new Error(err?.message || 'Failed to spawn ffmpeg')));
           ffmpeg.on('close', (code) => {
-            if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+            const outputSize = getOutputFileSize(outputPath);
+            if (code === 0 && outputSize >= minBytes) {
               resolve();
               return;
             }
             try {
               if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
             } catch {}
+            if (code === 0 && outputSize > 0 && outputSize < minBytes) {
+              reject(new Error(`ffmpeg produced undersized output (${outputSize} bytes)`));
+              return;
+            }
             reject(new Error(stderr?.slice(0, 800) || `ffmpeg exited with code ${code}`));
           });
         });
@@ -965,6 +984,7 @@ export function createRoutes(
     const id = `JOB-LOCAL-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
     const now = new Date().toISOString();
     const durationSec = Math.max(1, Math.min(300, Math.ceil((end.getTime() - start.getTime()) / 1000)));
+    const minWindowVideoBytes = Math.max(4096, Number(process.env.MIN_WINDOW_VIDEO_BYTES || 16384));
     const outputDir = path.join(process.cwd(), 'recordings', vehicleId, 'manual');
     const outputName = `${id}_ch${channel}.mp4`;
     const outputPath = path.join(outputDir, outputName);
@@ -1024,64 +1044,146 @@ export function createRoutes(
         }
 
         preparedSources.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
-        const concatBody = preparedSources
-          .map((source) => {
-            const normalizedPath = source.path.replace(/\\/g, '/').replace(/'/g, "'\\''");
-            return `file '${normalizedPath}'`;
-          })
-          .join('\n');
-        fs.writeFileSync(concatFilePath, concatBody, 'utf8');
-
         const firstStart = preparedSources[0].startTime;
         const trimOffsetSec = Math.max(0, (start.getTime() - firstStart.getTime()) / 1000);
-        const browserSafeProfile = [
-          '-hide_banner',
-          '-loglevel',
-          'error',
-          '-y',
-          '-f',
-          'concat',
-          '-safe',
-          '0',
-          '-i',
-          concatFilePath,
-          '-ss',
-          trimOffsetSec.toFixed(3),
-          '-t',
-          String(durationSec),
-          '-c:v',
-          'libx264',
-          '-preset',
-          'veryfast',
-          '-pix_fmt',
-          'yuv420p',
-          '-movflags',
-          '+faststart',
-          outputPath
-        ];
-        const copyProfile = [
-          '-hide_banner',
-          '-loglevel',
-          'error',
-          '-y',
-          '-f',
-          'concat',
-          '-safe',
-          '0',
-          '-i',
-          concatFilePath,
-          '-ss',
-          trimOffsetSec.toFixed(3),
-          '-t',
-          String(durationSec),
-          '-c',
-          'copy',
-          '-movflags',
-          '+faststart',
-          outputPath
-        ];
+        if (preparedSources.length === 1) {
+          const sourcePath = preparedSources[0].path;
+          const directTrimProfiles = [
+            [
+              '-hide_banner',
+              '-loglevel',
+              'error',
+              '-y',
+              '-ss',
+              trimOffsetSec.toFixed(3),
+              '-i',
+              sourcePath,
+              '-t',
+              String(durationSec),
+              '-c:v',
+              'libx264',
+              '-preset',
+              'veryfast',
+              '-pix_fmt',
+              'yuv420p',
+              '-movflags',
+              '+faststart',
+              outputPath
+            ],
+            [
+              '-hide_banner',
+              '-loglevel',
+              'error',
+              '-y',
+              '-ss',
+              trimOffsetSec.toFixed(3),
+              '-i',
+              sourcePath,
+              '-t',
+              String(durationSec),
+              '-c',
+              'copy',
+              '-movflags',
+              '+faststart',
+              outputPath
+            ]
+          ];
 
-        await runFfmpegProfiles([browserSafeProfile, copyProfile], outputPath);
+          try {
+            await runFfmpegProfiles(directTrimProfiles, outputPath, { minBytes: minWindowVideoBytes });
+          } catch {
+            const fullSegmentProfiles = [
+              [
+                '-hide_banner',
+                '-loglevel',
+                'error',
+                '-y',
+                '-i',
+                sourcePath,
+                '-c:v',
+                'libx264',
+                '-preset',
+                'veryfast',
+                '-pix_fmt',
+                'yuv420p',
+                '-movflags',
+                '+faststart',
+                outputPath
+              ],
+              [
+                '-hide_banner',
+                '-loglevel',
+                'error',
+                '-y',
+                '-i',
+                sourcePath,
+                '-c',
+                'copy',
+                '-movflags',
+                '+faststart',
+                outputPath
+              ]
+            ];
+            await runFfmpegProfiles(fullSegmentProfiles, outputPath, { minBytes: minWindowVideoBytes });
+          }
+        } else {
+          const concatBody = preparedSources
+            .map((source) => {
+              const normalizedPath = source.path.replace(/\\/g, '/').replace(/'/g, "'\\''");
+              return `file '${normalizedPath}'`;
+            })
+            .join('\n');
+          fs.writeFileSync(concatFilePath, concatBody, 'utf8');
+
+          const browserSafeProfile = [
+            '-hide_banner',
+            '-loglevel',
+            'error',
+            '-y',
+            '-f',
+            'concat',
+            '-safe',
+            '0',
+            '-i',
+            concatFilePath,
+            '-ss',
+            trimOffsetSec.toFixed(3),
+            '-t',
+            String(durationSec),
+            '-c:v',
+            'libx264',
+            '-preset',
+            'veryfast',
+            '-pix_fmt',
+            'yuv420p',
+            '-movflags',
+            '+faststart',
+            outputPath
+          ];
+          const copyProfile = [
+            '-hide_banner',
+            '-loglevel',
+            'error',
+            '-y',
+            '-f',
+            'concat',
+            '-safe',
+            '0',
+            '-i',
+            concatFilePath,
+            '-ss',
+            trimOffsetSec.toFixed(3),
+            '-t',
+            String(durationSec),
+            '-c',
+            'copy',
+            '-movflags',
+            '+faststart',
+            outputPath
+          ];
+
+          await runFfmpegProfiles([browserSafeProfile, copyProfile], outputPath, { minBytes: minWindowVideoBytes });
+        }
 
         const finalJob = manualVideoJobs.get(id);
         if (!finalJob) return;
