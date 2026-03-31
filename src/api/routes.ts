@@ -449,6 +449,82 @@ export function createRoutes(
       }))
       .filter((row: any) => !!row.file_path);
   };
+  const parseRecordingStartFromFilename = (filename: string): Date | null => {
+    const match = String(filename || '').match(/^channel_(\d+)_(.+)\.(h264|mp4)$/i);
+    if (!match) return null;
+    const raw = match[2].replace(/\.playable$/i, '');
+    const isoCandidate = raw.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/)
+      ? raw.replace(
+          /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/,
+          '$1T$2:$3:$4.$5Z'
+        )
+      : raw;
+    const parsed = new Date(isoCandidate);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+  const discoverFilesystemSegments = async (vehicleId: string, channel: number, start: Date, end: Date) => {
+    const recordingsDir = path.join(process.cwd(), 'recordings', vehicleId);
+    if (!fs.existsSync(recordingsDir)) return [];
+
+    const entries = fs.readdirSync(recordingsDir, { withFileTypes: true });
+    const rows = entries
+      .filter((entry) => entry.isFile())
+      .map((entry) => {
+        const channelMatch = entry.name.match(/^channel_(\d+)_/i);
+        if (!channelMatch) return null;
+        const fileChannel = Number(channelMatch[1] || 0);
+        if (fileChannel !== channel) return null;
+        if (/\.playable\.mp4$/i.test(entry.name)) return null;
+
+        const startedAt = parseRecordingStartFromFilename(entry.name);
+        if (!startedAt) return null;
+
+        const fullPath = path.join(recordingsDir, entry.name);
+        let stat: fs.Stats;
+        try {
+          stat = fs.statSync(fullPath);
+        } catch {
+          return null;
+        }
+
+        const endedAt = stat.mtimeMs > startedAt.getTime() ? new Date(stat.mtimeMs) : startedAt;
+        if (startedAt > end || endedAt < start) return null;
+
+        const playablePath = fullPath.replace(/\.(h264|mp4)$/i, '.playable.mp4');
+        const preferredPath = fs.existsSync(playablePath) ? playablePath : fullPath;
+        return {
+          id: `fs-${vehicleId}-${channel}-${entry.name}`,
+          file_path: preferredPath,
+          start_time: startedAt,
+          end_time: endedAt,
+          duration_seconds: Math.max(1, Math.round((endedAt.getTime() - startedAt.getTime()) / 1000)),
+          frame_count: null,
+          alert_id: null
+        };
+      })
+      .filter((row): row is {
+        id: string;
+        file_path: string;
+        start_time: Date;
+        end_time: Date;
+        duration_seconds: number;
+        frame_count: null;
+        alert_id: null;
+      } => !!row);
+
+    rows.sort((a, b) => a.start_time.getTime() - b.start_time.getTime());
+    return rows;
+  };
+  const queryStoredVideoSegmentsWithFilesystemFallback = async (
+    vehicleId: string,
+    channel: number,
+    start: Date,
+    end: Date
+  ) => {
+    const dbRows = await queryStoredVideoSegments(vehicleId, channel, start, end);
+    if (dbRows.length > 0) return dbRows;
+    return discoverFilesystemSegments(vehicleId, channel, start, end);
+  };
   const inferSegmentInputFps = (segment: {
     duration_seconds?: number | null;
     frame_count?: number | null;
@@ -1208,7 +1284,7 @@ export function createRoutes(
   const alertManager = tcpServer.getAlertManager();
   alertManager.on('request-camera-video', ({ vehicleId, channel, startTime, endTime, alertId, windowType }) => {
     if (!alertId || !vehicleId) return;
-    const dedupeKey = `${String(alertId)}:${String(windowType || 'generic')}`;
+    const dedupeKey = `${String(alertId)}:${Number(channel || 1)}:${String(windowType || 'generic')}`;
     if (queuedAlertWindows.has(dedupeKey)) return;
     queuedAlertWindows.add(dedupeKey);
     buildManualVideoJob(
@@ -4196,7 +4272,24 @@ export function createRoutes(
         [id, startOfDay, endOfDay]
       );
 
-      const rows = result.rows || [];
+      const rows = [...(result.rows || [])];
+      if (rows.length === 0) {
+        for (const channel of [1, 2, 3, 4]) {
+          const fsRows = await discoverFilesystemSegments(id, channel, startOfDay, endOfDay);
+          rows.push(...fsRows.map((row) => ({
+            id: row.id,
+            device_id: id,
+            channel,
+            video_type: 'live',
+            start_time: row.start_time,
+            end_time: row.end_time,
+            duration_seconds: row.duration_seconds,
+            file_size: (() => {
+              try { return fs.statSync(row.file_path).size; } catch { return 0; }
+            })()
+          })));
+        }
+      }
       const byChannel = new Map<number, any[]>();
       for (const row of rows) {
         const channel = Number(row.channel || 1) || 1;
@@ -4277,7 +4370,29 @@ export function createRoutes(
       sql += ` ORDER BY start_time ASC LIMIT ${maxLimit}`;
 
       const result = await db.query(sql, params);
-      const videos = (result.rows || []).map((v: any) => {
+      let sourceRows = result.rows || [];
+      if (sourceRows.length === 0 && ch > 0) {
+        sourceRows = await discoverFilesystemSegments(id, ch, start, end).then((rows) =>
+          rows.map((row) => ({
+            id: row.id,
+            device_id: id,
+            channel: ch,
+            video_type: 'live',
+            file_path: row.file_path,
+            storage_url: null,
+            file_size: (() => {
+              try { return fs.statSync(row.file_path).size; } catch { return 0; }
+            })(),
+            start_time: row.start_time,
+            end_time: row.end_time,
+            duration_seconds: row.duration_seconds,
+            created_at: row.start_time,
+            alert_id: null
+          }))
+        );
+      }
+
+      const videos = sourceRows.map((v: any) => {
         const rawPath = String(v.file_path || '').trim();
         const localPath = rawPath
           ? (path.isAbsolute(rawPath) ? rawPath : path.join(process.cwd(), rawPath))
@@ -4364,18 +4479,7 @@ export function createRoutes(
     const ch = Number(channel) || 1;
     try {
       const db = require('../storage/database');
-      const result = await db.query(
-        `SELECT id, file_path, start_time, end_time, duration_seconds, frame_count, alert_id
-         FROM videos
-         WHERE device_id = $1
-           AND channel = $2
-           AND start_time <= $3
-           AND COALESCE(end_time, start_time) >= $4
-         ORDER BY start_time ASC`,
-        [id, ch, end, start]
-      );
-
-      let rows = (result.rows || []).filter((row: any) => String(row?.file_path || '').trim());
+      let rows = await queryStoredVideoSegmentsWithFilesystemFallback(id, ch, start, end);
       let resolvedChannel = ch;
 
       if (rows.length === 0) {
@@ -4389,7 +4493,16 @@ export function createRoutes(
           [id, end, start]
         );
 
-        const candidateRows = (anyChannelResult.rows || []).filter((row: any) => String(row?.file_path || '').trim());
+        let candidateRows = (anyChannelResult.rows || []).filter((row: any) => String(row?.file_path || '').trim());
+        if (candidateRows.length === 0) {
+          const inferredChannels = [1, 2, 3, 4].filter((candidate) => candidate !== ch);
+          for (const candidate of inferredChannels) {
+            const fsRows = await discoverFilesystemSegments(id, candidate, start, end);
+            if (fsRows.length > 0) {
+              candidateRows = candidateRows.concat(fsRows.map((row) => ({ ...row, channel: candidate })));
+            }
+          }
+        }
         if (candidateRows.length > 0) {
           const grouped = new Map<number, any[]>();
           for (const row of candidateRows) {

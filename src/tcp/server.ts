@@ -1412,6 +1412,10 @@ export class JTT808Server {
 
   private resolveAlertCaptureChannels(vehicleId: string, requestedChannel?: number): number[] {
     const vehicle = this.vehicles.get(vehicleId);
+    const configuredDefaults = String(process.env.ALERT_CAPTURE_CHANNELS || '1,2')
+      .split(',')
+      .map((value) => Number(String(value || '').trim()))
+      .filter((value, index, arr) => Number.isFinite(value) && value > 0 && arr.indexOf(value) === index);
     const channelsFromCapabilities = vehicle?.channels
       ?.filter((ch) => ch.type === 'video' || ch.type === 'audio_video')
       .map((ch) => Number(ch.logicalChannel))
@@ -1421,6 +1425,7 @@ export class JTT808Server {
       .filter((ch) => Number.isFinite(ch) && ch > 0);
     const requested = Number(requestedChannel);
     const channels = [
+      ...configuredDefaults,
       ...(channelsFromCapabilities || []),
       ...channelsFromActiveStreams,
       ...(Number.isFinite(requested) && requested > 0 ? [requested] : [])
@@ -1432,9 +1437,8 @@ export class JTT808Server {
 
     const fallback = Number(requestedChannel);
     const defaults = [
+      ...configuredDefaults,
       ...(Number.isFinite(fallback) && fallback > 0 ? [fallback] : []),
-      1,
-      2
     ];
     return Array.from(new Set(defaults)).sort((a, b) => a - b);
   }

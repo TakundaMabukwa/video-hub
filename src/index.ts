@@ -475,13 +475,13 @@ async function startServer() {
   });
 
   // Keep camera streams alive in backend mode (independent of UI subscribers).
-  const getBackgroundChannels = (vehicle: any) => {
+  const getBackgroundChannels = (vehicle: any): number[] => {
     const fromCapabilities = (vehicle.channels || [])
       .filter((ch: any) => ch.type === 'video' || ch.type === 'audio_video')
       .map((ch: any) => Number(ch.logicalChannel))
       .filter((ch: number) => Number.isFinite(ch) && ch > 0);
 
-    return [...new Set(fromCapabilities.length ? fromCapabilities : BACKGROUND_STREAM_DEFAULT_CHANNELS)];
+    return Array.from(new Set<number>(fromCapabilities.length ? fromCapabilities : BACKGROUND_STREAM_DEFAULT_CHANNELS));
   };
 
   const ensureBackgroundStreams = () => {
