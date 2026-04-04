@@ -14,10 +14,11 @@ export class VideoWriter {
   private filePaths = new Map<string, string>();
   private bytesWritten = new Map<string, number>();
   private lastPersistTimes = new Map<string, number>();
-  private readonly segmentDurationMs = Math.max(10_000, Number(process.env.LIVE_SEGMENT_SECONDS || 60) * 1000);
+  private readonly segmentDurationMs = Math.max(10_000, Number(process.env.LIVE_SEGMENT_SECONDS || 15) * 1000);
   private readonly progressUpdateMs = Math.max(1000, Number(process.env.VIDEO_PROGRESS_UPDATE_MS || 5000));
   private readonly rotationCheckMs = Math.max(2_000, Math.min(10_000, Number(process.env.VIDEO_ROTATION_CHECK_MS || Math.floor(this.segmentDurationMs / 2))));
-  private readonly minValidSegmentBytes = Math.max(64 * 1024, Number(process.env.MIN_VALID_SEGMENT_BYTES || 256 * 1024));
+  private readonly minValidSegmentBytes = Math.max(32 * 1024, Number(process.env.MIN_VALID_SEGMENT_BYTES || 64 * 1024));
+  private readonly minRecoverableSegmentBytes = Math.max(16 * 1024, Number(process.env.MIN_RECOVERABLE_SEGMENT_BYTES || 32 * 1024));
   private pendingTranscodes = new Set<string>();
   private readonly rotationTimer: NodeJS.Timeout;
 
@@ -117,6 +118,18 @@ export class VideoWriter {
 
   private buildFinalizedPath(filepath: string): string {
     return filepath.replace(/\.partial(?=\.[^.]+$)/i, '');
+  }
+
+  private shouldKeepDegradedSegment(filepath: string, fileSize: number, duration: number, frameCount: number): boolean {
+    try {
+      if (!filepath || !fs.existsSync(filepath)) return false;
+      const stat = fs.statSync(filepath);
+      if (!stat.isFile()) return false;
+    } catch {
+      return false;
+    }
+
+    return fileSize >= this.minRecoverableSegmentBytes && (duration >= 2 || frameCount >= 10);
   }
 
   private async validateRecordedSegment(filepath: string): Promise<boolean> {
@@ -287,8 +300,12 @@ export class VideoWriter {
             this.validateRecordedSegment(usablePath)
               .then((valid) => {
                 if (!valid) {
-                  try { if (fs.existsSync(usablePath)) fs.unlinkSync(usablePath); } catch {}
-                  return this.videoStorage.deleteVideo(videoId);
+                  const keepDegraded = this.shouldKeepDegradedSegment(usablePath, finalSize, duration, frameCount);
+                  if (!keepDegraded) {
+                    try { if (fs.existsSync(usablePath)) fs.unlinkSync(usablePath); } catch {}
+                    return this.videoStorage.deleteVideo(videoId);
+                  }
+                  console.warn(`Keeping degraded segment for playback fallback: ${usablePath}`);
                 }
                 this.kickoffPlayableTranscode(usablePath);
                 return this.videoStorage.updateVideoEnd(videoId, endTime, finalSize, duration, frameCount, usablePath);
