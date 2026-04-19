@@ -640,14 +640,46 @@ export function createRoutes(
     alertTs: Date
   ) => {
     const db = require('../storage/database');
+    const channels = getVehicleChannels(vehicleId, alertChannel).slice(0, 2);
+    if (channels.length === 0) return;
+
     const existing = await db.query(
-      `SELECT id FROM images WHERE alert_id = $1 LIMIT 1`,
+      `SELECT id, channel
+       FROM images
+       WHERE alert_id = $1`,
       [alertId]
     );
-    if ((existing.rows || []).length > 0) return;
+    const linkedChannels = new Set(
+      (existing.rows || [])
+        .map((row: any) => Number(row?.channel || 0))
+        .filter((value: number) => Number.isFinite(value) && value > 0)
+    );
 
-    const channels = getVehicleChannels(vehicleId, alertChannel).slice(0, 2);
-    for (const ch of channels) {
+    const missingChannels = channels.filter((ch) => !linkedChannels.has(ch));
+    if (missingChannels.length === 0) return;
+
+    const linkWindowFrom = new Date(alertTs.getTime() - 90 * 1000);
+    const linkWindowTo = new Date(alertTs.getTime() + 90 * 1000);
+
+    for (const ch of missingChannels) {
+      const linkedExisting = await db.query(
+        `UPDATE images
+         SET alert_id = $1
+         WHERE id IN (
+           SELECT id
+           FROM images
+           WHERE alert_id IS NULL
+             AND device_id = $2
+             AND channel = $3
+             AND timestamp BETWEEN $4 AND $5
+           ORDER BY ABS(EXTRACT(EPOCH FROM (timestamp - $6::timestamp))) ASC
+           LIMIT 1
+         )
+         RETURNING id`,
+        [alertId, vehicleId, ch, linkWindowFrom, linkWindowTo, alertTs]
+      );
+      if (Number(linkedExisting.rowCount || 0) > 0) continue;
+
       const segments = await queryStoredVideoSegments(
         vehicleId,
         ch,
