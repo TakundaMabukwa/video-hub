@@ -4,6 +4,130 @@ import { AlertEvent } from '../alerts/alertManager';
 export class AlertStorageDB {
   private readonly dbEnabled = isDatabaseEnabled();
 
+  private normalizePriority(value?: string | null): 'low' | 'medium' | 'high' | 'critical' {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'critical' || normalized === 'high' || normalized === 'medium' || normalized === 'low') {
+      return normalized;
+    }
+    return 'high';
+  }
+
+  private async ensureAlertExistsForClosure(input: {
+    alertId: string;
+    closureType: 'resolved' | 'false_alert' | 'ncr' | 'report';
+    notes: string;
+    actor?: string;
+    reasonCode?: string;
+    reasonLabel?: string;
+    documentUrl?: string;
+    documentName?: string;
+    documentType?: string;
+    payload?: Record<string, any>;
+  }): Promise<boolean> {
+    const payload = input.payload || {};
+    const metadata = payload?.savedArtifact?.closurePayload || {};
+    const deviceId = String(
+      payload?.deviceId ||
+      metadata?.deviceId ||
+      payload?.vehicleId ||
+      metadata?.vehicleId ||
+      ''
+    ).trim();
+    const alertType = String(
+      payload?.alertType ||
+      metadata?.alertType ||
+      'manual_closure'
+    ).trim() || 'manual_closure';
+    const channel = Number(
+      payload?.channel ??
+      metadata?.channel ??
+      1
+    );
+    const priority = this.normalizePriority(
+      payload?.severity ||
+      metadata?.severity ||
+      'high'
+    );
+    const timestampSource =
+      payload?.timestamp ||
+      metadata?.timestamp ||
+      new Date().toISOString();
+    const parsedTimestamp = new Date(timestampSource);
+    const timestamp = Number.isNaN(parsedTimestamp.getTime())
+      ? new Date().toISOString()
+      : parsedTimestamp.toISOString();
+    const latitude = Number(payload?.coordinates?.latitude ?? metadata?.coordinates?.latitude);
+    const longitude = Number(payload?.coordinates?.longitude ?? metadata?.coordinates?.longitude);
+    const closureSubtype =
+      input.closureType === 'resolved' ? 'manual' : input.closureType;
+    const isFalse = input.closureType === 'false_alert';
+
+    if (!deviceId || !Number.isFinite(channel) || channel <= 0) {
+      return false;
+    }
+
+    const deviceExists = await query(
+      `SELECT 1 FROM devices WHERE device_id = $1 LIMIT 1`,
+      [deviceId]
+    );
+    if ((deviceExists.rowCount || 0) === 0) {
+      return false;
+    }
+
+    await query(
+      `INSERT INTO alerts (
+         id, device_id, channel, alert_type, priority, status, resolved,
+         escalation_level, timestamp, latitude, longitude, metadata,
+         repeated_count, last_occurrence, resolved_at, resolution_notes,
+         resolved_by, closure_type, closure_subtype, resolution_reason_code,
+         resolution_reason_label, is_false_alert, false_alert_reason,
+         false_alert_reason_code, ncr_document_url, ncr_document_name,
+         report_document_url, report_document_name, report_document_type,
+         closure_payload
+       )
+       VALUES (
+         $1, $2, $3, $4, $5, 'resolved', TRUE,
+         0, $6, $7, $8, $9::jsonb,
+         1, $6, NOW(), $10,
+         $11, $12, $13, $14,
+         $15, $16, CASE WHEN $16 THEN $10 ELSE NULL END,
+         CASE WHEN $16 THEN $14 ELSE NULL END,
+         CASE WHEN $12 = 'ncr' THEN $17 ELSE NULL END,
+         CASE WHEN $12 = 'ncr' THEN $18 ELSE NULL END,
+         CASE WHEN $12 = 'report' THEN $17 ELSE NULL END,
+         CASE WHEN $12 = 'report' THEN $18 ELSE NULL END,
+         CASE WHEN $12 = 'report' THEN $19 ELSE NULL END,
+         $20::jsonb
+       )
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        input.alertId,
+        deviceId,
+        channel,
+        alertType,
+        priority,
+        timestamp,
+        Number.isFinite(latitude) ? latitude : null,
+        Number.isFinite(longitude) ? longitude : null,
+        JSON.stringify(payload || {}),
+        input.notes,
+        input.actor || null,
+        input.closureType === 'resolved' ? 'manual' : input.closureType,
+        closureSubtype,
+        input.reasonCode || null,
+        input.reasonLabel || null,
+        isFalse,
+        input.documentUrl || null,
+        input.documentName || null,
+        input.documentType || null,
+        JSON.stringify(payload || {})
+      ]
+    );
+
+    const exists = await query(`SELECT 1 FROM alerts WHERE id = $1`, [input.alertId]);
+    return (exists.rowCount || 0) > 0;
+  }
+
   private async recordResolutionEvent(
     alertId: string,
     data: {
@@ -94,7 +218,13 @@ export class AlertStorageDB {
       ]
     );
 
-    const ok = (result.rowCount || 0) > 0;
+    let ok = (result.rowCount || 0) > 0;
+    if (!ok) {
+      const inserted = await this.ensureAlertExistsForClosure(input);
+      if (inserted) {
+        ok = true;
+      }
+    }
     if (ok) {
       await this.recordResolutionEvent(input.alertId, {
         actionType: input.closureType === 'resolved' ? 'resolved' : input.closureType,
