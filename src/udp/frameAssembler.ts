@@ -163,8 +163,8 @@ export class FrameAssembler {
     header: JTT1078RTPHeader,
     dataType: number,
     now: number
-  ): FrameBuffer | null {
-    let bestCandidate: FrameBuffer | null = null;
+  ): FrameBuffer | undefined {
+    let bestCandidate: FrameBuffer | undefined;
     let bestScore = Number.POSITIVE_INFINITY;
 
     for (const candidate of streamFrames.values()) {

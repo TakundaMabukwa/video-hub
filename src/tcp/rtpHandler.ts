@@ -216,7 +216,6 @@ export class TCPRTPHandler {
   getStats() {
     return {
       frameCount: this.frameCount,
-      activeStreams: this.activeStreams.size,
       ...this.frameAssembler.getStats()
     };
   }
